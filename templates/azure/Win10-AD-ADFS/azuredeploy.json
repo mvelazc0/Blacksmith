@@ -1,7 +1,7 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
     "contentVersion": "1.0.0.0",
-    "parameters": {
+    "parameters": {        
         "adminUsername": {
             "type": "string",
             "metadata": {
@@ -51,6 +51,12 @@
             },
             "defaultValue": "blacksmith.local"
         },
+        "domainNetbiosName": {
+            "type": "string",
+            "metadata": {
+                "description": "Netbios name to use."
+            }
+        },        
         "numberOfWorkstations": {
             "type": "int",
             "minValue": 1,
@@ -880,6 +886,9 @@
                     },
                     "domainFQDN": {
                         "value": "[parameters('domainFQDN')]"
+                    },
+                    "domainNetbiosName": {
+                        "value": "[parameters('domainNetbiosName')]"
                     },
                     "adminUsername": {
                         "value": "[parameters('adminUsername')]"
