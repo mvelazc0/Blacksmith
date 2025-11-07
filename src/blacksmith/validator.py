@@ -1,0 +1,350 @@
+"""
+Configuration Validator Module
+
+Validates YAML configuration against the schema and performs semantic validation.
+"""
+
+import re
+from pathlib import Path
+from typing import Dict, Any, List, Tuple
+import yaml
+import jsonschema
+from jsonschema import validate, ValidationError
+
+
+class ConfigValidator:
+    """Validate configuration files against schema and business rules."""
+    
+    def __init__(self, schema_path: str = None):
+        """
+        Initialize the ConfigValidator.
+        
+        Args:
+            schema_path: Path to the JSON schema file
+        """
+        if schema_path is None:
+            # Try multiple methods to find the schema file
+            schema_path = self._find_schema_file()
+        
+        self.schema_path = Path(schema_path)
+        self.schema = self._load_schema()
+        self.errors: List[str] = []
+        self.warnings: List[str] = []
+    
+    def _find_schema_file(self) -> Path:
+        """Find the schema file using multiple fallback methods."""
+        # Method 1: Try importlib.resources (Python 3.7+)
+        try:
+            import importlib.resources as pkg_resources
+            # For Python 3.9+
+            if hasattr(pkg_resources, 'files'):
+                schema_path = pkg_resources.files('blacksmith').parent / 'config' / 'schemas' / 'lab-config.schema.yaml'
+                if schema_path.exists():
+                    return schema_path
+        except (ImportError, AttributeError, TypeError):
+            pass
+        
+        # Method 2: Try pkg_resources (older method)
+        try:
+            import pkg_resources
+            schema_path = Path(pkg_resources.resource_filename(
+                __name__.split('.')[0],
+                '../config/schemas/lab-config.schema.yaml'
+            ))
+            if schema_path.exists():
+                return schema_path
+        except:
+            pass
+        
+        # Method 3: Relative to this file (development mode)
+        base_dir = Path(__file__).parent.parent.parent
+        schema_path = base_dir / "config" / "schemas" / "lab-config.schema.yaml"
+        if schema_path.exists():
+            return schema_path
+        
+        # Method 4: Check current working directory
+        cwd_schema = Path.cwd() / "config" / "schemas" / "lab-config.schema.yaml"
+        if cwd_schema.exists():
+            return cwd_schema
+        
+        # If all methods fail, return the expected path and let it fail with a clear error
+        raise FileNotFoundError(
+            f"Could not find schema file. Tried:\n"
+            f"  - Package resources\n"
+            f"  - {base_dir / 'config' / 'schemas' / 'lab-config.schema.yaml'}\n"
+            f"  - {cwd_schema}\n"
+            f"Please ensure Blacksmith is properly installed or run from the project root."
+        )
+    
+    def _load_schema(self) -> Dict[str, Any]:
+        """Load the JSON schema from file."""
+        if not self.schema_path.exists():
+            raise FileNotFoundError(f"Schema file not found: {self.schema_path}")
+        
+        with open(self.schema_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    
+    def validate(self, config: Dict[str, Any]) -> Tuple[bool, List[str], List[str]]:
+        """
+        Validate configuration against schema and business rules.
+        
+        Args:
+            config: Configuration dictionary to validate
+            
+        Returns:
+            Tuple of (is_valid, errors, warnings)
+        """
+        self.errors = []
+        self.warnings = []
+        
+        # Schema validation
+        try:
+            validate(instance=config, schema=self.schema)
+        except ValidationError as e:
+            self.errors.append(f"Schema validation error: {e.message}")
+            return False, self.errors, self.warnings
+        
+        # Semantic validation
+        self._validate_network(config)
+        self._validate_virtual_machines(config)
+        self._validate_dependencies(config)
+        self._validate_active_directory(config)
+        self._validate_services(config)
+        self._validate_ip_addresses(config)
+        
+        is_valid = len(self.errors) == 0
+        return is_valid, self.errors, self.warnings
+    
+    def _validate_network(self, config: Dict[str, Any]):
+        """Validate network configuration."""
+        network = config.get('network', {})
+        
+        # Validate subnet ranges are within VNet range
+        vnet_range = network.get('address_space', '')
+        subnets = network.get('subnets', [])
+        
+        for subnet in subnets:
+            subnet_range = subnet.get('address_prefix', '')
+            if not self._is_subnet_in_vnet(subnet_range, vnet_range):
+                self.errors.append(
+                    f"Subnet {subnet.get('name')} range {subnet_range} "
+                    f"is not within VNet range {vnet_range}"
+                )
+    
+    def _validate_virtual_machines(self, config: Dict[str, Any]):
+        """Validate virtual machine configurations."""
+        vms = config.get('virtual_machines', [])
+        vm_names = set()
+        
+        for vm in vms:
+            vm_name = vm.get('name', '')
+            count = vm.get('count', 1)
+            
+            # Check for duplicate VM names
+            if count == 1:
+                if vm_name in vm_names:
+                    self.errors.append(f"Duplicate VM name: {vm_name}")
+                vm_names.add(vm_name)
+            else:
+                # For VMs with count > 1, check if names will conflict
+                for i in range(count):
+                    generated_name = f"{vm_name}{i + vm.get('network', {}).get('ip_start', '').split('.')[-1]}"
+                    if generated_name in vm_names:
+                        self.errors.append(f"Generated VM name conflict: {generated_name}")
+                    vm_names.add(generated_name)
+            
+            # Validate VM name length (Azure limit is 15 for Windows)
+            if vm.get('type') in ['windows_server', 'windows_desktop']:
+                if len(vm_name) > 15:
+                    self.errors.append(
+                        f"Windows VM name '{vm_name}' exceeds 15 character limit"
+                    )
+            
+            # Validate subnet exists
+            subnet_name = vm.get('network', {}).get('subnet')
+            if subnet_name:
+                subnets = config.get('network', {}).get('subnets', [])
+                subnet_names = [s.get('name') for s in subnets]
+                if subnet_name not in subnet_names:
+                    self.errors.append(
+                        f"VM '{vm_name}' references non-existent subnet '{subnet_name}'"
+                    )
+    
+    def _validate_dependencies(self, config: Dict[str, Any]):
+        """Validate VM dependencies."""
+        vms = config.get('virtual_machines', [])
+        vm_names = {vm.get('name') for vm in vms}
+        
+        for vm in vms:
+            depends_on = vm.get('depends_on', [])
+            for dep in depends_on:
+                if dep not in vm_names:
+                    self.errors.append(
+                        f"VM '{vm.get('name')}' depends on non-existent VM '{dep}'"
+                    )
+        
+        # Check for circular dependencies
+        if self._has_circular_dependencies(vms):
+            self.errors.append("Circular dependency detected in VM dependencies")
+    
+    def _validate_active_directory(self, config: Dict[str, Any]):
+        """Validate Active Directory configuration."""
+        ad_config = config.get('active_directory', {})
+        
+        if not ad_config.get('enabled', False):
+            return
+        
+        # Check if there's a domain controller
+        vms = config.get('virtual_machines', [])
+        has_dc = any(vm.get('role') == 'domain_controller' for vm in vms)
+        
+        if not has_dc:
+            self.errors.append(
+                "Active Directory is enabled but no domain controller VM is defined"
+            )
+        
+        # Validate domain FQDN format
+        domain_fqdn = ad_config.get('domain_fqdn', '')
+        if domain_fqdn and not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}$', domain_fqdn):
+            self.errors.append(f"Invalid domain FQDN format: {domain_fqdn}")
+        
+        # Validate user accounts
+        users = ad_config.get('users', [])
+        sam_accounts = set()
+        for user in users:
+            sam = user.get('sam_account', '')
+            if sam in sam_accounts:
+                self.errors.append(f"Duplicate SAM account name: {sam}")
+            sam_accounts.add(sam)
+    
+    def _validate_services(self, config: Dict[str, Any]):
+        """Validate service configurations."""
+        services = config.get('services', {})
+        vms = config.get('virtual_machines', [])
+        vm_names = {vm.get('name') for vm in vms}
+        vm_roles = {vm.get('name'): vm.get('role') for vm in vms}
+        
+        # Validate ADFS
+        adfs = services.get('adfs', {})
+        if adfs.get('enabled', False):
+            adfs_server = adfs.get('server')
+            if adfs_server and adfs_server not in vm_names:
+                self.errors.append(
+                    f"ADFS server '{adfs_server}' not found in VM definitions"
+                )
+            elif adfs_server and vm_roles.get(adfs_server) != 'adfs':
+                self.warnings.append(
+                    f"ADFS server '{adfs_server}' does not have role 'adfs'"
+                )
+        
+        # Validate WEC
+        wec = services.get('wec', {})
+        if wec.get('enabled', False):
+            wec_server = wec.get('server')
+            if wec_server and wec_server not in vm_names:
+                self.errors.append(
+                    f"WEC server '{wec_server}' not found in VM definitions"
+                )
+            elif wec_server and vm_roles.get(wec_server) != 'wec':
+                self.warnings.append(
+                    f"WEC server '{wec_server}' does not have role 'wec'"
+                )
+        
+        # Validate Exchange
+        exchange = services.get('exchange', {})
+        if exchange.get('enabled', False):
+            exchange_server = exchange.get('server')
+            if exchange_server and exchange_server not in vm_names:
+                self.errors.append(
+                    f"Exchange server '{exchange_server}' not found in VM definitions"
+                )
+    
+    def _validate_ip_addresses(self, config: Dict[str, Any]):
+        """Validate IP address assignments."""
+        vms = config.get('virtual_machines', [])
+        used_ips = set()
+        
+        for vm in vms:
+            network = vm.get('network', {})
+            private_ip = network.get('private_ip')
+            
+            if private_ip:
+                if private_ip in used_ips:
+                    self.errors.append(f"Duplicate IP address: {private_ip}")
+                used_ips.add(private_ip)
+                
+                # Validate IP is in correct subnet
+                subnet_name = network.get('subnet')
+                if subnet_name:
+                    subnets = config.get('network', {}).get('subnets', [])
+                    subnet = next((s for s in subnets if s.get('name') == subnet_name), None)
+                    if subnet:
+                        subnet_range = subnet.get('address_prefix', '')
+                        if not self._is_ip_in_subnet(private_ip, subnet_range):
+                            self.errors.append(
+                                f"IP {private_ip} for VM '{vm.get('name')}' "
+                                f"is not in subnet range {subnet_range}"
+                            )
+    
+    def _is_subnet_in_vnet(self, subnet_cidr: str, vnet_cidr: str) -> bool:
+        """Check if subnet CIDR is within VNet CIDR."""
+        # Simplified check - in production, use ipaddress module
+        try:
+            import ipaddress
+            subnet = ipaddress.ip_network(subnet_cidr, strict=False)
+            vnet = ipaddress.ip_network(vnet_cidr, strict=False)
+            return subnet.subnet_of(vnet)
+        except:
+            return True  # Skip validation if ipaddress not available
+    
+    def _is_ip_in_subnet(self, ip: str, subnet_cidr: str) -> bool:
+        """Check if IP address is within subnet CIDR."""
+        try:
+            import ipaddress
+            ip_addr = ipaddress.ip_address(ip)
+            subnet = ipaddress.ip_network(subnet_cidr, strict=False)
+            return ip_addr in subnet
+        except:
+            return True  # Skip validation if ipaddress not available
+    
+    def _has_circular_dependencies(self, vms: List[Dict[str, Any]]) -> bool:
+        """Check for circular dependencies in VM definitions."""
+        # Build dependency graph
+        graph = {}
+        for vm in vms:
+            vm_name = vm.get('name')
+            depends_on = vm.get('depends_on', [])
+            graph[vm_name] = depends_on
+        
+        # DFS to detect cycles
+        visited = set()
+        rec_stack = set()
+        
+        def has_cycle(node):
+            visited.add(node)
+            rec_stack.add(node)
+            
+            for neighbor in graph.get(node, []):
+                if neighbor not in visited:
+                    if has_cycle(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    return True
+            
+            rec_stack.remove(node)
+            return False
+        
+        for vm_name in graph:
+            if vm_name not in visited:
+                if has_cycle(vm_name):
+                    return True
+        
+        return False
+    
+    def get_errors(self) -> List[str]:
+        """Get validation errors."""
+        return self.errors
+    
+    def get_warnings(self) -> List[str]:
+        """Get validation warnings."""
+        return self.warnings

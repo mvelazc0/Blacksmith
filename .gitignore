@@ -1,3 +1,8 @@
 
 aws/mordor/.DS_Store
 .DS_Store
+
+venv/
+build/
+dist/
+blacksmith_azure.egg-info/

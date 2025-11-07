@@ -1,0 +1,94 @@
+# Blacksmith Lab Configuration
+# Scenario: Minimal Active Directory Lab
+# Simple setup with just a DC and one workstation
+
+name: "minimal-ad-lab"
+description: "Minimal Active Directory lab with one DC and one workstation"
+location: "eastus"
+resource_group: "rg-blacksmith-minimal3"
+
+# Network Configuration
+network:
+  vnet_name: "vnet-minimal"
+  address_space: "192.168.0.0/16"
+  
+  subnets:
+    - name: "snet-default"
+      address_prefix: "192.168.1.0/24"
+  
+  nsg:
+    name: "nsg-rdp-allow"
+    rules:
+      - name: "allow-rdp"
+        priority: 100
+        direction: "Inbound"
+        access: "Allow"
+        protocol: "Tcp"
+        source_port: "*"
+        destination_port: "3389"
+        source_address: "*"
+  
+  remote_access:
+    mode: "AzureBastionHost"
+    bastion:
+      enabled: true
+      subnet_prefix: "192.168.0.0/16"
+
+# Credentials
+credentials:
+  admin_username: "labadmin"
+  admin_password: "YourSecurePassword123!"
+
+# Virtual Machines
+virtual_machines:
+  - name: "DC01"
+    type: "windows_server"
+    role: "domain_controller"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+      version: "latest"
+    network:
+      subnet: "snet-default"
+      private_ip: "192.168.1.4"
+  
+  - name: "WORKSTATION5"
+    type: "windows_desktop"
+    size: "Standard_B2ms"
+    os:
+      sku: "win10-22h2-pro"
+      version: "latest"
+    network:
+      subnet: "snet-default"
+      private_ip: "192.168.1.5"
+    depends_on:
+      - "DC01"
+
+# Active Directory Configuration
+active_directory:
+  enabled: true
+  domain_fqdn: "lab.local"
+  domain_netbios: "LAB"
+  
+  users:
+    - first_name: "Test"
+      last_name: "User"
+      sam_account: "testuser"
+      password: "TestPassword123!"
+      department: "IT"
+      job_title: "Administrator"
+      groups: ["Domain Admins"]
+
+# Features
+features:
+  sysmon:
+    enabled: false
+  
+  aad_connect:
+    enabled: false
+
+# Tags
+tags:
+  environment: "lab"
+  scenario: "minimal-ad"
+  project: "blacksmith"
