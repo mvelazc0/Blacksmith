@@ -40,7 +40,7 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.7",
     install_requires=[
         "PyYAML>=6.0",
         "jsonschema>=4.17.0",
