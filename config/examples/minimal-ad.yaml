@@ -5,7 +5,7 @@
 name: "minimal-ad-lab"
 description: "Minimal Active Directory lab with one DC and one workstation"
 location: "eastus"
-resource_group: "rg-blacksmith-minimal2"
+resource_group: "rg-blacksmith-minimal011"
 
 # Network Configuration
 network:
@@ -86,6 +86,38 @@ features:
   
   aad_connect:
     enabled: false
+  
+  # Logging Configuration
+  logging:
+    enabled: true
+    workspace:
+      name: "minimal-ad-logs"
+      retention_days: 30
+      pricing_tier: "PerGB2018"
+    
+    data_collection_rules:
+      - name: "dcr-windows-security"
+        data_sources:
+          windows_event_logs:
+            - name: "SecurityEvents"
+              streams:
+                - "Microsoft-WindowsEvent"
+              x_path_queries:
+                - "Security!*[System[(Level=1 or Level=2 or Level=3 or Level=4 or Level=0)]]"
+                - "Application!*[System[(Level=1 or Level=2 or Level=3)]]"
+                - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
+          performance_counters:
+            - name: "BasicPerfCounters"
+              streams:
+                - "Microsoft-Perf"
+              sampling_frequency_in_seconds: 60
+              counter_specifiers:
+                - "\\Processor(_Total)\\% Processor Time"
+                - "\\Memory\\Available MBytes"
+                - "\\LogicalDisk(_Total)\\% Free Space"
+        targets:
+          - "DC01"
+          - "WORKSTATION5"
 
 # Tags
 tags:

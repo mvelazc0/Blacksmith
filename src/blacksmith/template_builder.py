@@ -53,6 +53,9 @@ class TemplateBuilder:
         # Add service configurations
         self._add_service_resources()
         
+        # Add logging resources (if enabled)
+        self._add_logging_resources()
+        
         # Add outputs
         self._add_outputs()
         
@@ -739,7 +742,7 @@ class TemplateBuilder:
         # For now, handle single workstation config (can be extended for multiple)
         workstation = workstation_vms[0]
         count = workstation.get('count', 1)
-        vm_name_prefix = workstation.get('name', 'WORKSTATION')
+        configured_name = workstation.get('name', 'WORKSTATION')
         
         # Get IP configuration
         vm_network = workstation.get('network', {})
@@ -748,6 +751,26 @@ class TemplateBuilder:
         # Get private IP and extract suffix
         private_ip = vm_network.get('private_ip', '192.168.1.5')
         ip_suffix = int(private_ip.split('.')[-1])
+        
+        # For single workstation, use the full configured name as prefix and 0 as suffix
+        # This way Win10 template creates: "WORKSTATION5" + "0" = "WORKSTATION50"
+        # Actually, we want just "WORKSTATION5", so we need a different approach
+        # The Win10 template always appends suffix, so for single VM we pass the name without the number
+        # and let it append the number we want
+        if count == 1:
+            # If name ends with a number, split it: "WORKSTATION5" -> "WORKSTATION" + 5
+            import re
+            match = re.match(r'^(.+?)(\d+)$', configured_name)
+            if match:
+                vm_name_prefix = match.group(1)  # "WORKSTATION"
+                vm_name_suffix = int(match.group(2))  # 5
+            else:
+                # No number at end, use full name and suffix 1
+                vm_name_prefix = configured_name
+                vm_name_suffix = 1
+        else:
+            vm_name_prefix = configured_name
+            vm_name_suffix = ip_suffix
         
         # Find the subnet configuration to get address prefix
         subnets = network.get('subnets', [])
@@ -799,7 +822,7 @@ class TemplateBuilder:
                         "value": vm_name_prefix
                     },
                     "vmNameSuffix": {
-                        "value": ip_suffix
+                        "value": vm_name_suffix
                     },
                     "windowsDesktopSKU": {
                         "value": sku
@@ -984,6 +1007,239 @@ class TemplateBuilder:
                 }
                 
                 self.template["resources"].append(join_extension)
+    
+    def _add_logging_resources(self):
+        """Add Log Analytics Workspace and Data Collection Rules if logging is enabled."""
+        features = self.config.get('features', {})
+        logging_config = features.get('logging', {})
+        
+        if not logging_config.get('enabled'):
+            return
+        
+        # Step 1: Create Log Analytics Workspace
+        workspace_resource_id = self._add_log_analytics_workspace(logging_config)
+        
+        # Step 2: Create Data Collection Rules (no DCE needed for standard Windows logs)
+        dcr_ids = self._add_data_collection_rules(logging_config, workspace_resource_id)
+        
+        # Step 3: Create DCR Associations (this automatically installs Azure Monitor Agent)
+        self._add_dcr_associations(logging_config, dcr_ids)
+    
+    def _add_log_analytics_workspace(self, logging_config: Dict[str, Any]) -> str:
+        """
+        Create Log Analytics Workspace using nested deployment.
+        
+        Args:
+            logging_config: Logging configuration dictionary
+            
+        Returns:
+            ARM template expression for workspace resource ID
+        """
+        workspace_config = logging_config.get('workspace', {})
+        workspace_name = workspace_config.get('name', 'blacksmith-logs')
+        
+        # Store workspace name for use in DCR
+        self._log_workspace_name = workspace_name
+        
+        deployment = {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "deployLogAnalyticsWorkspace",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace/azuredeploy.json",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "workspaceName": {
+                        "value": workspace_name
+                    },
+                    "pricingTier": {
+                        "value": workspace_config.get('pricing_tier', 'PerGB2018')
+                    },
+                    "dataRetention": {
+                        "value": workspace_config.get('retention_days', 30)
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    }
+                }
+            }
+        }
+        
+        self.template["resources"].append(deployment)
+        
+        # Return the workspace resource ID expression
+        return "[reference('deployLogAnalyticsWorkspace').outputs.workspaceIdOutput.value]"
+    
+    def _add_data_collection_rules(self, logging_config: Dict[str, Any], workspace_resource_id: str) -> List[str]:
+        """
+        Create Data Collection Rules for specified data sources.
+        
+        Args:
+            logging_config: Logging configuration dictionary
+            workspace_resource_id: ARM expression for workspace resource ID
+            
+        Returns:
+            List of DCR resource ID expressions
+        """
+        dcr_configs = logging_config.get('data_collection_rules', [])
+        dcr_ids = []
+        
+        for dcr in dcr_configs:
+            dcr_name = dcr.get('name', 'dcr-default')
+            data_sources_config = dcr.get('data_sources', {})
+            
+            # Build data sources object
+            data_sources = {}
+            
+            # Windows Event Logs - convert to ARM template format
+            # Azure Monitor requires specific format for Windows Event Logs
+            windows_event_logs = data_sources_config.get('windows_event_logs', [])
+            if windows_event_logs:
+                arm_event_logs = []
+                for log_config in windows_event_logs:
+                    # Each event log source needs name, streams, and xPathQueries
+                    event_log_source = {
+                        "name": log_config.get('name', 'eventLogsDataSource'),
+                        "streams": log_config.get('streams', ['Microsoft-WindowsEvent'])
+                    }
+                    
+                    # Add xPathQueries if provided
+                    xpath_queries = log_config.get('x_path_queries', [])
+                    if xpath_queries:
+                        event_log_source["xPathQueries"] = xpath_queries
+                    
+                    arm_event_logs.append(event_log_source)
+                
+                data_sources["windowsEventLogs"] = arm_event_logs
+            
+            # Performance Counters - convert to ARM template format
+            performance_counters = data_sources_config.get('performance_counters', [])
+            if performance_counters:
+                arm_perf_counters = []
+                for perf_config in performance_counters:
+                    arm_perf_counters.append({
+                        "name": perf_config.get('name'),
+                        "streams": perf_config.get('streams', ['Microsoft-Perf']),
+                        "samplingFrequencyInSeconds": perf_config.get('sampling_frequency_in_seconds', 60),
+                        "counterSpecifiers": perf_config.get('counter_specifiers', [])
+                    })
+                data_sources["performanceCounters"] = arm_perf_counters
+            
+            # Build data flows
+            data_flows = []
+            
+            # Add flow for Windows Event Logs
+            if windows_event_logs:
+                for log_config in windows_event_logs:
+                    data_flows.append({
+                        "streams": log_config.get('streams', ['Microsoft-WindowsEvent']),
+                        "destinations": ["centralWorkspace"]
+                    })
+            
+            # Add flow for Performance Counters
+            if performance_counters:
+                for perf_config in performance_counters:
+                    data_flows.append({
+                        "streams": perf_config.get('streams', ['Microsoft-Perf']),
+                        "destinations": ["centralWorkspace"]
+                    })
+            
+            # Build destinations - construct the full workspace resource ID
+            # The Log Analytics template outputs the workspace name, we need to build the full resource ID
+            workspace_name = getattr(self, '_log_workspace_name', 'blacksmith-logs')
+            destinations = {
+                "logAnalytics": [{
+                    "workspaceResourceId": f"[concat(subscription().id, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.OperationalInsights/workspaces/', reference('deployLogAnalyticsWorkspace').outputs.workspaceName_output.value)]",
+                    "name": "centralWorkspace"
+                }]
+            }
+            
+            # Create DCR directly (no DCE needed for standard Windows logs)
+            dcr_resource = {
+                "type": "Microsoft.Insights/dataCollectionRules",
+                "apiVersion": "2021-04-01",
+                "name": dcr_name,
+                "location": "[parameters('location')]",
+                "dependsOn": [
+                    "[resourceId('Microsoft.Resources/deployments', 'deployLogAnalyticsWorkspace')]"
+                ],
+                "properties": {
+                    "dataSources": data_sources,
+                    "destinations": destinations,
+                    "dataFlows": data_flows
+                }
+            }
+            
+            self.template["resources"].append(dcr_resource)
+            dcr_ids.append({
+                "name": dcr_name,
+                "id": f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]",
+                "targets": dcr.get('targets', [])
+            })
+        
+        return dcr_ids
+    
+    def _add_dcr_associations(self, logging_config: Dict[str, Any], dcr_ids: List[Dict[str, Any]]):
+        """
+        Create DCR associations which automatically install Azure Monitor Agent.
+        
+        Args:
+            logging_config: Logging configuration dictionary
+            dcr_ids: List of DCR information dictionaries
+        """
+        vms = self.config.get('virtual_machines', [])
+        
+        # Create DCR associations for each DCR
+        for dcr_info in dcr_ids:
+            dcr_name = dcr_info['name']
+            dcr_targets = dcr_info['targets']
+            
+            # Determine which VMs to associate
+            if not dcr_targets:
+                target_vms = vms
+            else:
+                target_vms = [vm for vm in vms if vm.get('name') in dcr_targets]
+            
+            if not target_vms:
+                continue
+            
+            # Create association for each VM
+            for vm in target_vms:
+                vm_name = vm.get('name')
+                
+                # Build dependencies - check if VM is created directly or via nested deployment
+                association_dependencies = [
+                    f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]"
+                ]
+                
+                # Add dependency on domain join if AD is enabled
+                ad_config = self.config.get('active_directory', {})
+                if ad_config.get('enabled'):
+                    association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
+                
+                # If VM is a workstation (created via nested deployment), depend on that deployment
+                # Otherwise depend on the VM resource directly
+                if vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller':
+                    association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]")
+                else:
+                    association_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines', '{vm_name}')]")
+                
+                # Create DCR association - this will automatically install Azure Monitor Agent
+                association = {
+                    "type": "Microsoft.Insights/dataCollectionRuleAssociations",
+                    "apiVersion": "2021-04-01",
+                    "name": f"{vm_name}-{dcr_name}-association",
+                    "scope": f"[resourceId('Microsoft.Compute/virtualMachines', '{vm_name}')]",
+                    "dependsOn": association_dependencies,
+                    "properties": {
+                        "dataCollectionRuleId": dcr_info['id']
+                    }
+                }
+                
+                self.template["resources"].append(association)
     
     def save_template(self, output_path: str):
         """

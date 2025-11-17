@@ -395,6 +395,91 @@ properties:
           workspace_key:
             type: string
 
+      logging:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+            default: false
+          workspace:
+            type: object
+            properties:
+              name:
+                type: string
+                pattern: "^[a-zA-Z0-9-]+$"
+                minLength: 4
+                maxLength: 63
+              retention_days:
+                type: integer
+                minimum: 7
+                maximum: 730
+                default: 30
+              pricing_tier:
+                type: string
+                enum:
+                  - PerGB2018
+                  - Free
+                  - Standalone
+                  - PerNode
+                  - Standard
+                  - Premium
+                default: PerGB2018
+          data_collection_rules:
+            type: array
+            items:
+              type: object
+              required:
+                - name
+                - data_sources
+              properties:
+                name:
+                  type: string
+                  pattern: "^[a-zA-Z0-9-]+$"
+                data_sources:
+                  type: object
+                  properties:
+                    windows_event_logs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          streams:
+                            type: array
+                            items:
+                              type: string
+                          x_path_queries:
+                            type: array
+                            items:
+                              type: string
+                    performance_counters:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          streams:
+                            type: array
+                            items:
+                              type: string
+                          sampling_frequency_in_seconds:
+                            type: integer
+                            default: 60
+                          counter_specifiers:
+                            type: array
+                            items:
+                              type: string
+                    sysmon:
+                      type: boolean
+                      default: false
+                targets:
+                  type: array
+                  items:
+                    type: string
+                  description: "VM names to apply DCR to (empty means all VMs)"
+
   tags:
     type: object
     additionalProperties:

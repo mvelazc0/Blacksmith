@@ -1,0 +1,19 @@
+# Blacksmith Requirements
+
+# Core dependencies
+PyYAML>=6.0
+jsonschema>=4.17.0
+
+# Azure SDK (optional, for direct API access)
+# azure-mgmt-resource>=21.0.0
+# azure-identity>=1.12.0
+
+# CLI dependencies
+argparse>=1.4.0
+
+# Development dependencies (optional)
+# pytest>=7.2.0
+# pytest-cov>=4.0.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.0.0
