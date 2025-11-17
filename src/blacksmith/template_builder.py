@@ -1109,9 +1109,10 @@ class TemplateBuilder:
                 arm_event_logs = []
                 for log_config in windows_event_logs:
                     # Each event log source needs name, streams, and xPathQueries
+                    # Use Microsoft-Event for standard Event table (not Microsoft-WindowsEvent)
                     event_log_source = {
                         "name": log_config.get('name', 'eventLogsDataSource'),
-                        "streams": log_config.get('streams', ['Microsoft-WindowsEvent'])
+                        "streams": log_config.get('streams', ['Microsoft-Event'])
                     }
                     
                     # Add xPathQueries if provided
@@ -1143,8 +1144,10 @@ class TemplateBuilder:
             if windows_event_logs:
                 for log_config in windows_event_logs:
                     data_flows.append({
-                        "streams": log_config.get('streams', ['Microsoft-WindowsEvent']),
-                        "destinations": ["centralWorkspace"]
+                        "streams": log_config.get('streams', ['Microsoft-Event']),
+                        "destinations": ["centralWorkspace"],
+                        "transformKql": "source",
+                        "outputStream": "Microsoft-Event"
                     })
             
             # Add flow for Performance Counters
@@ -1170,6 +1173,7 @@ class TemplateBuilder:
                 "type": "Microsoft.Insights/dataCollectionRules",
                 "apiVersion": "2021-04-01",
                 "name": dcr_name,
+                "kind": "Windows",
                 "location": "[parameters('location')]",
                 "dependsOn": [
                     "[resourceId('Microsoft.Resources/deployments', 'deployLogAnalyticsWorkspace')]"

@@ -5,7 +5,7 @@
 name: "minimal-ad-lab"
 description: "Minimal Active Directory lab with one DC and one workstation"
 location: "eastus"
-resource_group: "rg-blacksmith-minimal011"
+resource_group: "rg-blacksmith-minimal017"
 
 # Network Configuration
 network:
@@ -99,11 +99,11 @@ features:
       - name: "dcr-windows-security"
         data_sources:
           windows_event_logs:
-            - name: "SecurityEvents"
+            - name: "eventLogsDataSource"
               streams:
-                - "Microsoft-WindowsEvent"
+                - "Microsoft-Event"
               x_path_queries:
-                - "Security!*[System[(Level=1 or Level=2 or Level=3 or Level=4 or Level=0)]]"
+                - "Security!*[System[(band(Keywords,13510798882111488))]]"
                 - "Application!*[System[(Level=1 or Level=2 or Level=3)]]"
                 - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
           performance_counters:
