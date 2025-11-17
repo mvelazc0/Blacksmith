@@ -404,10 +404,12 @@ class TemplateBuilder:
             }
         }
         
-        # Add identity if specified
+        # Add identity - default to SystemAssigned for Azure Monitor Agent support
         identity = vm.get('identity', {})
-        if identity.get('type') and identity.get('type') != 'None':
-            vm_resource["identity"] = {"type": identity.get('type')}
+        identity_type = identity.get('type', 'SystemAssigned')
+        
+        if identity_type and identity_type != 'None':
+            vm_resource["identity"] = {"type": identity_type}
         
         return vm_resource
     
@@ -866,6 +868,9 @@ class TemplateBuilder:
                     "newOrExistingBastion": {
                         "value": "existing"
                     },
+                    "identityType": {
+                        "value": "SystemAssigned"
+                    },
                     "enableSysmon": {
                         "value": False
                     },
@@ -1019,10 +1024,13 @@ class TemplateBuilder:
         # Step 1: Create Log Analytics Workspace
         workspace_resource_id = self._add_log_analytics_workspace(logging_config)
         
-        # Step 2: Create Data Collection Rules (no DCE needed for standard Windows logs)
+        # Step 2: Create Data Collection Rules
         dcr_ids = self._add_data_collection_rules(logging_config, workspace_resource_id)
         
-        # Step 3: Create DCR Associations (this automatically installs Azure Monitor Agent)
+        # Step 3: Install Azure Monitor Agents via extension
+        self._add_azure_monitor_agents(logging_config, dcr_ids)
+        
+        # Step 4: Create DCR Associations
         self._add_dcr_associations(logging_config, dcr_ids)
     
     def _add_log_analytics_workspace(self, logging_config: Dict[str, Any]) -> str:
@@ -1182,6 +1190,68 @@ class TemplateBuilder:
         
         return dcr_ids
     
+    def _add_azure_monitor_agents(self, logging_config: Dict[str, Any], dcr_ids: List[Dict[str, Any]]):
+        """
+        Install Azure Monitor Agents on VMs via extension.
+        
+        Args:
+            logging_config: Logging configuration dictionary
+            dcr_ids: List of DCR information dictionaries
+        """
+        vms = self.config.get('virtual_machines', [])
+        
+        # Collect all target VMs across all DCRs
+        for dcr_info in dcr_ids:
+            dcr_name = dcr_info['name']
+            dcr_targets = dcr_info['targets']
+            
+            # Determine which VMs to install agents on
+            if not dcr_targets:
+                target_vms = [{"vmName": vm.get('name')} for vm in vms]
+            else:
+                target_vms = [{"vmName": vm.get('name')} for vm in vms if vm.get('name') in dcr_targets]
+            
+            if not target_vms:
+                continue
+            
+            # Build dependencies for agent installation
+            agent_dependencies = [
+                f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]"
+            ]
+            
+            # Add dependency on domain join if AD is enabled
+            ad_config = self.config.get('active_directory', {})
+            if ad_config.get('enabled'):
+                agent_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
+            
+            # Deploy Azure Monitor Agent extension
+            agent_deployment = {
+                "type": "Microsoft.Resources/deployments",
+                "apiVersion": "2021-04-01",
+                "name": f"installAzureMonitorAgents-{dcr_name}",
+                "dependsOn": agent_dependencies,
+                "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                        "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Azure-Monitor-Agents/windows.json",
+                        "contentVersion": "1.0.0.0"
+                    },
+                    "parameters": {
+                        "virtualMachines": {
+                            "value": target_vms
+                        },
+                        "monitorAgent": {
+                            "value": "Azure Monitor Agent"
+                        },
+                        "location": {
+                            "value": "[parameters('location')]"
+                        }
+                    }
+                }
+            }
+            
+            self.template["resources"].append(agent_deployment)
+    
     def _add_dcr_associations(self, logging_config: Dict[str, Any], dcr_ids: List[Dict[str, Any]]):
         """
         Create DCR associations which automatically install Azure Monitor Agent.
@@ -1212,7 +1282,8 @@ class TemplateBuilder:
                 
                 # Build dependencies - check if VM is created directly or via nested deployment
                 association_dependencies = [
-                    f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]"
+                    f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]",
+                    f"[resourceId('Microsoft.Resources/deployments', 'installAzureMonitorAgents-{dcr_name}')]"
                 ]
                 
                 # Add dependency on domain join if AD is enabled
