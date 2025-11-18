@@ -1036,6 +1036,7 @@ class TemplateBuilder:
     def _add_log_analytics_workspace(self, logging_config: Dict[str, Any]) -> str:
         """
         Create Log Analytics Workspace using nested deployment.
+        Optionally enables Microsoft Sentinel if configured.
         
         Args:
             logging_config: Logging configuration dictionary
@@ -1045,9 +1046,16 @@ class TemplateBuilder:
         """
         workspace_config = logging_config.get('workspace', {})
         workspace_name = workspace_config.get('name', 'blacksmith-logs')
+        enable_sentinel = workspace_config.get('enable_sentinel', False)
         
         # Store workspace name for use in DCR
         self._log_workspace_name = workspace_name
+        
+        # Choose template based on whether Sentinel is enabled
+        if enable_sentinel:
+            template_uri = "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace-Sentinel/azuredeploy.json"
+        else:
+            template_uri = "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace/azuredeploy.json"
         
         deployment = {
             "type": "Microsoft.Resources/deployments",
@@ -1056,7 +1064,7 @@ class TemplateBuilder:
             "properties": {
                 "mode": "Incremental",
                 "templateLink": {
-                    "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace/azuredeploy.json",
+                    "uri": template_uri,
                     "contentVersion": "1.0.0.0"
                 },
                 "parameters": {

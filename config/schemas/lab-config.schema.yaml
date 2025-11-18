@@ -424,6 +424,10 @@ properties:
                   - Standard
                   - Premium
                 default: PerGB2018
+              enable_sentinel:
+                type: boolean
+                default: false
+                description: "Enable Microsoft Sentinel on the workspace"
           data_collection_rules:
             type: array
             items:

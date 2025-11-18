@@ -5,7 +5,7 @@
 name: "minimal-ad-lab"
 description: "Minimal Active Directory lab with one DC and one workstation"
 location: "eastus"
-resource_group: "rg-blacksmith-minimal017"
+resource_group: "rg-blacksmith-minimal018"
 
 # Network Configuration
 network:
@@ -94,6 +94,7 @@ features:
       name: "minimal-ad-logs"
       retention_days: 30
       pricing_tier: "PerGB2018"
+      enable_sentinel: true
     
     data_collection_rules:
       - name: "dcr-windows-security"
