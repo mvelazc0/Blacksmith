@@ -1051,12 +1051,7 @@ class TemplateBuilder:
         # Store workspace name for use in DCR
         self._log_workspace_name = workspace_name
         
-        # Choose template based on whether Sentinel is enabled
-        if enable_sentinel:
-            template_uri = "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace-Sentinel/azuredeploy.json"
-        else:
-            template_uri = "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace/azuredeploy.json"
-        
+        # Always use the regular workspace template
         deployment = {
             "type": "Microsoft.Resources/deployments",
             "apiVersion": "2021-04-01",
@@ -1064,7 +1059,7 @@ class TemplateBuilder:
             "properties": {
                 "mode": "Incremental",
                 "templateLink": {
-                    "uri": template_uri,
+                    "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace/azuredeploy.json",
                     "contentVersion": "1.0.0.0"
                 },
                 "parameters": {
@@ -1086,8 +1081,80 @@ class TemplateBuilder:
         
         self.template["resources"].append(deployment)
         
+        # If Sentinel is enabled, add the SecurityInsights solution and onboarding state
+        if enable_sentinel:
+            self._add_sentinel_onboarding(workspace_name)
+        
         # Return the workspace resource ID expression
         return "[reference('deployLogAnalyticsWorkspace').outputs.workspaceIdOutput.value]"
+    
+    def _add_sentinel_onboarding(self, workspace_name: str):
+        """
+        Add Microsoft Sentinel onboarding resources via nested deployment.
+        
+        Args:
+            workspace_name: Name of the Log Analytics workspace
+        """
+        # Use nested deployment to enable Sentinel
+        # Pass workspace name as parameter to avoid reference() issues
+        sentinel_deployment = {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "deploySentinel",
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'deployLogAnalyticsWorkspace')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "expressionEvaluationOptions": {
+                    "scope": "inner"
+                },
+                "parameters": {
+                    "workspaceName": {
+                        "value": "[reference('deployLogAnalyticsWorkspace').outputs.workspaceName_output.value]"
+                    }
+                },
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "workspaceName": {
+                            "type": "string"
+                        }
+                    },
+                    "variables": {},
+                    "resources": [
+                        {
+                            "type": "Microsoft.OperationsManagement/solutions",
+                            "apiVersion": "2015-11-01-preview",
+                            "name": "[concat('SecurityInsights(', parameters('workspaceName'), ')')]",
+                            "location": "[resourceGroup().location]",
+                            "properties": {
+                                "workspaceResourceId": "[concat(subscription().id, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'))]"
+                            },
+                            "plan": {
+                                "name": "[concat('SecurityInsights(', parameters('workspaceName'), ')')]",
+                                "product": "OMSGallery/SecurityInsights",
+                                "publisher": "Microsoft",
+                                "promotionCode": ""
+                            }
+                        },
+                        {
+                            "type": "Microsoft.SecurityInsights/onboardingStates",
+                            "apiVersion": "2024-03-01",
+                            "name": "default",
+                            "scope": "[concat('Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'))]",
+                            "dependsOn": [
+                                "[resourceId('Microsoft.OperationsManagement/solutions', concat('SecurityInsights(', parameters('workspaceName'), ')'))]"
+                            ],
+                            "properties": {}
+                        }
+                    ]
+                }
+            }
+        }
+        
+        self.template["resources"].append(sentinel_deployment)
     
     def _add_data_collection_rules(self, logging_config: Dict[str, Any], workspace_resource_id: str) -> List[str]:
         """
