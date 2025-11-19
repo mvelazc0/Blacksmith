@@ -131,34 +131,64 @@ class ConfigValidator:
                     f"is not within VNet range {vnet_range}"
                 )
     
+    def _generate_vm_name_for_validation(self, vm: Dict[str, Any], index: int) -> str:
+        """Generate VM name for validation (matches template_builder logic)."""
+        base_name = vm.get('name', '')
+        suffix = vm.get('suffix', '')
+        naming_pattern = vm.get('naming_pattern', 'suffix-number')
+        count = vm.get('count', 1)
+        
+        # Determine the prefix to use
+        if suffix:
+            prefix = suffix
+        elif base_name:
+            prefix = base_name
+        else:
+            prefix = 'VM'
+        
+        # If count is 1 and we have a name (not suffix), just use the name as-is
+        if count == 1 and base_name and not suffix:
+            return base_name
+        
+        # Generate number with zero-padding
+        if count < 10:
+            number = f"{(index + 1):02d}"  # Always use 2 digits for consistency (01-09)
+        elif count < 100:
+            number = f"{(index + 1):02d}"
+        else:
+            number = f"{(index + 1):03d}"
+        
+        # Apply naming pattern
+        if naming_pattern == 'suffix-number':
+            return f"{prefix}{number}"
+        elif naming_pattern == 'number-suffix':
+            return f"{number}{prefix}"
+        elif naming_pattern == 'suffix-only':
+            return f"{prefix}{(index + 1)}"
+        else:
+            return f"{prefix}{number}"
+    
     def _validate_virtual_machines(self, config: Dict[str, Any]):
         """Validate virtual machine configurations."""
         vms = config.get('virtual_machines', [])
         vm_names = set()
         
         for vm in vms:
-            vm_name = vm.get('name', '')
             count = vm.get('count', 1)
             
-            # Check for duplicate VM names
-            if count == 1:
-                if vm_name in vm_names:
-                    self.errors.append(f"Duplicate VM name: {vm_name}")
-                vm_names.add(vm_name)
-            else:
-                # For VMs with count > 1, check if names will conflict
-                for i in range(count):
-                    generated_name = f"{vm_name}{i + vm.get('network', {}).get('ip_start', '').split('.')[-1]}"
-                    if generated_name in vm_names:
-                        self.errors.append(f"Generated VM name conflict: {generated_name}")
-                    vm_names.add(generated_name)
-            
-            # Validate VM name length (Azure limit is 15 for Windows)
-            if vm.get('type') in ['windows_server', 'windows_desktop']:
-                if len(vm_name) > 15:
-                    self.errors.append(
-                        f"Windows VM name '{vm_name}' exceeds 15 character limit"
-                    )
+            # Generate all instance names and check for duplicates
+            for i in range(count):
+                generated_name = self._generate_vm_name_for_validation(vm, i)
+                if generated_name in vm_names:
+                    self.errors.append(f"Duplicate or conflicting VM name: {generated_name}")
+                vm_names.add(generated_name)
+                
+                # Validate VM name length (Azure limit is 15 for Windows)
+                if vm.get('type') in ['windows_server', 'windows_desktop']:
+                    if len(generated_name) > 15:
+                        self.errors.append(
+                            f"Windows VM name '{generated_name}' exceeds 15 character limit"
+                        )
             
             # Validate subnet exists
             subnet_name = vm.get('network', {}).get('subnet')
@@ -173,14 +203,16 @@ class ConfigValidator:
     def _validate_dependencies(self, config: Dict[str, Any]):
         """Validate VM dependencies."""
         vms = config.get('virtual_machines', [])
-        vm_names = {vm.get('name') for vm in vms}
+        # Collect all possible VM identifiers (name or suffix)
+        vm_identifiers = {vm.get('suffix') or vm.get('name') for vm in vms}
         
         for vm in vms:
             depends_on = vm.get('depends_on', [])
+            vm_identifier = vm.get('suffix') or vm.get('name')
             for dep in depends_on:
-                if dep not in vm_names:
+                if dep not in vm_identifiers:
                     self.errors.append(
-                        f"VM '{vm.get('name')}' depends on non-existent VM '{dep}'"
+                        f"VM '{vm_identifier}' depends on non-existent VM '{dep}'"
                     )
         
         # Check for circular dependencies
@@ -221,14 +253,15 @@ class ConfigValidator:
         """Validate service configurations."""
         services = config.get('services', {})
         vms = config.get('virtual_machines', [])
-        vm_names = {vm.get('name') for vm in vms}
-        vm_roles = {vm.get('name'): vm.get('role') for vm in vms}
+        # Use suffix or name as identifier
+        vm_identifiers = {vm.get('suffix') or vm.get('name') for vm in vms}
+        vm_roles = {(vm.get('suffix') or vm.get('name')): vm.get('role') for vm in vms}
         
         # Validate ADFS
         adfs = services.get('adfs', {})
         if adfs.get('enabled', False):
             adfs_server = adfs.get('server')
-            if adfs_server and adfs_server not in vm_names:
+            if adfs_server and adfs_server not in vm_identifiers:
                 self.errors.append(
                     f"ADFS server '{adfs_server}' not found in VM definitions"
                 )
@@ -241,7 +274,7 @@ class ConfigValidator:
         wec = services.get('wec', {})
         if wec.get('enabled', False):
             wec_server = wec.get('server')
-            if wec_server and wec_server not in vm_names:
+            if wec_server and wec_server not in vm_identifiers:
                 self.errors.append(
                     f"WEC server '{wec_server}' not found in VM definitions"
                 )
@@ -254,7 +287,7 @@ class ConfigValidator:
         exchange = services.get('exchange', {})
         if exchange.get('enabled', False):
             exchange_server = exchange.get('server')
-            if exchange_server and exchange_server not in vm_names:
+            if exchange_server and exchange_server not in vm_identifiers:
                 self.errors.append(
                     f"Exchange server '{exchange_server}' not found in VM definitions"
                 )
@@ -309,12 +342,12 @@ class ConfigValidator:
     
     def _has_circular_dependencies(self, vms: List[Dict[str, Any]]) -> bool:
         """Check for circular dependencies in VM definitions."""
-        # Build dependency graph
+        # Build dependency graph using suffix or name as identifier
         graph = {}
         for vm in vms:
-            vm_name = vm.get('name')
+            vm_identifier = vm.get('suffix') or vm.get('name')
             depends_on = vm.get('depends_on', [])
-            graph[vm_name] = depends_on
+            graph[vm_identifier] = depends_on
         
         # DFS to detect cycles
         visited = set()

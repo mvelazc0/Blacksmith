@@ -238,6 +238,58 @@ class TemplateBuilder:
         
         self.template["resources"].extend(resources)
     
+    def _generate_vm_name(self, vm: Dict[str, Any], index: int) -> str:
+        """
+        Generate VM name based on configuration.
+        
+        Args:
+            vm: VM configuration dictionary
+            index: Instance index (0-based)
+            
+        Returns:
+            Generated VM name
+        """
+        base_name = vm.get('name', '')
+        suffix = vm.get('suffix', '')
+        naming_pattern = vm.get('naming_pattern', 'suffix-number')
+        count = vm.get('count', 1)
+        
+        # Determine the prefix to use
+        # Priority: suffix > name > default
+        if suffix:
+            prefix = suffix
+        elif base_name:
+            prefix = base_name
+        else:
+            prefix = 'VM'  # Fallback default
+        
+        # If count is 1 and we have a name (not suffix), just use the name as-is
+        if count == 1 and base_name and not suffix:
+            return base_name
+        
+        # Generate number with zero-padding (01, 02, etc.)
+        # Determine padding based on count
+        if count < 10:
+            number = f"{(index + 1):02d}"  # Always use 2 digits for consistency (01-09)
+        elif count < 100:
+            number = f"{(index + 1):02d}"
+        else:
+            number = f"{(index + 1):03d}"
+        
+        # Apply naming pattern
+        if naming_pattern == 'suffix-number':
+            # e.g., srv01, srv02
+            return f"{prefix}{number}"
+        elif naming_pattern == 'number-suffix':
+            # e.g., 01srv, 02srv
+            return f"{number}{prefix}"
+        elif naming_pattern == 'suffix-only':
+            # e.g., srv1, srv2 (no zero padding)
+            return f"{prefix}{(index + 1)}"
+        else:
+            # Default to suffix-number
+            return f"{prefix}{number}"
+    
     def _add_compute_resources(self):
         """Add compute resources (VMs) to the template."""
         vms = self.config.get('virtual_machines', [])
@@ -250,16 +302,11 @@ class TemplateBuilder:
             if vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop':
                 continue
                 
-            vm_name = vm.get('name')
-            vm_type = vm.get('type')
             count = vm.get('count', 1)
             
             # For VMs with count > 1, create multiple instances
             for i in range(count):
-                if count > 1:
-                    instance_name = f"{vm_name}{i + int(vm.get('network', {}).get('ip_start', '5').split('.')[-1])}"
-                else:
-                    instance_name = vm_name
+                instance_name = self._generate_vm_name(vm, i)
                 
                 # Public IP (if needed)
                 if remote_access.get('mode') == 'AllowPublicIP':
@@ -285,20 +332,51 @@ class TemplateBuilder:
         # Add workstations via nested deployment
         self._add_workstations_deployment()
     
+    def _calculate_vm_ip(self, vm: Dict[str, Any], index: int) -> str:
+        """
+        Calculate IP address for VM instance.
+        
+        Args:
+            vm: VM configuration dictionary
+            index: Instance index (0-based)
+            
+        Returns:
+            IP address string
+        """
+        vm_network = vm.get('network', {})
+        count = vm.get('count', 1)
+        
+        # Check if ip_start is provided - if so, use it for IP calculation
+        ip_start = vm_network.get('ip_start')
+        if ip_start:
+            # Use ip_start and increment by index
+            ip_parts = ip_start.split('.')
+            ip_parts[-1] = str(int(ip_parts[-1]) + index)
+            return '.'.join(ip_parts)
+        
+        # Otherwise use private_ip (for single VMs with explicit IP)
+        private_ip = vm_network.get('private_ip')
+        if private_ip:
+            if count > 1:
+                # Multiple VMs but only private_ip given - increment from it
+                ip_parts = private_ip.split('.')
+                ip_parts[-1] = str(int(ip_parts[-1]) + index)
+                return '.'.join(ip_parts)
+            else:
+                # Single VM with explicit private_ip
+                return private_ip
+        
+        # Fallback default (should rarely be used)
+        return f"192.168.1.{10 + index}"
+    
     def _create_nic_resource(self, vm: Dict[str, Any], instance_name: str, index: int) -> Dict[str, Any]:
         """Create network interface resource."""
         network = self.config.get('network', {})
         vm_network = vm.get('network', {})
         subnet_name = vm_network.get('subnet', 'default')
         
-        # Calculate IP address
-        if vm.get('count', 1) > 1:
-            ip_start = vm_network.get('ip_start', '192.168.1.5')
-            ip_parts = ip_start.split('.')
-            ip_parts[-1] = str(int(ip_parts[-1]) + index)
-            private_ip = '.'.join(ip_parts)
-        else:
-            private_ip = vm_network.get('private_ip', '192.168.1.10')
+        # Calculate IP address using helper method
+        private_ip = self._calculate_vm_ip(vm, index)
         
         nic = {
             "type": "Microsoft.Network/networkInterfaces",
@@ -556,16 +634,11 @@ class TemplateBuilder:
             if vm.get('role') == 'domain_controller':
                 continue
             
-            vm_name = vm.get('name')
             count = vm.get('count', 1)
-            vm_network = vm.get('network', {})
             
             # Handle multiple instances
             for i in range(count):
-                if count > 1:
-                    instance_name = f"{vm_name}{i + int(vm_network.get('ip_start', '5').split('.')[-1])}"
-                else:
-                    instance_name = vm_name
+                instance_name = self._generate_vm_name(vm, i)
                 
                 # Custom Script Extension to install DSC modules
                 prep_extension = {
@@ -744,35 +817,38 @@ class TemplateBuilder:
         # For now, handle single workstation config (can be extended for multiple)
         workstation = workstation_vms[0]
         count = workstation.get('count', 1)
-        configured_name = workstation.get('name', 'WORKSTATION')
+        suffix = workstation.get('suffix', '')
+        naming_pattern = workstation.get('naming_pattern', 'suffix-number')
         
         # Get IP configuration
         vm_network = workstation.get('network', {})
         subnet_name = vm_network.get('subnet', 'default')
         
-        # Get private IP and extract suffix
-        private_ip = vm_network.get('private_ip', '192.168.1.5')
+        # Calculate starting IP for the first workstation
+        private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
         ip_suffix = int(private_ip.split('.')[-1])
         
-        # For single workstation, use the full configured name as prefix and 0 as suffix
-        # This way Win10 template creates: "WORKSTATION5" + "0" = "WORKSTATION50"
-        # Actually, we want just "WORKSTATION5", so we need a different approach
-        # The Win10 template always appends suffix, so for single VM we pass the name without the number
-        # and let it append the number we want
-        if count == 1:
-            # If name ends with a number, split it: "WORKSTATION5" -> "WORKSTATION" + 5
+        # Determine prefix and suffix for Win10 template
+        # The Win10 template uses vmNamePrefix + vmNameSuffix pattern
+        # IMPORTANT: vmNameSuffix is used for BOTH naming AND IP calculation in Win10 template
+        # So we need to use the IP suffix, not just 1
+        if suffix:
+            # User provided a suffix - use it as the prefix
+            vm_name_prefix = suffix
+            vm_name_suffix = ip_suffix  # Use IP suffix for proper IP allocation
+        else:
+            # No suffix provided - use the configured name
+            configured_name = workstation.get('name', 'WORKSTATION')
+            # Extract any trailing number from the name
             import re
             match = re.match(r'^(.+?)(\d+)$', configured_name)
             if match:
-                vm_name_prefix = match.group(1)  # "WORKSTATION"
-                vm_name_suffix = int(match.group(2))  # 5
+                vm_name_prefix = match.group(1)  # e.g., "WORKSTATION"
+                vm_name_suffix = int(match.group(2))  # e.g., 5
             else:
-                # No number at end, use full name and suffix 1
+                # No number at end
                 vm_name_prefix = configured_name
-                vm_name_suffix = 1
-        else:
-            vm_name_prefix = configured_name
-            vm_name_suffix = ip_suffix
+                vm_name_suffix = ip_suffix  # Use IP suffix
         
         # Find the subnet configuration to get address prefix
         subnets = network.get('subnets', [])
@@ -961,15 +1037,11 @@ class TemplateBuilder:
         vms_to_join = [vm for vm in vms if vm.get('role') != 'domain_controller']
         
         for vm in vms_to_join:
-            vm_name = vm.get('name')
             count = vm.get('count', 1)
             
             # Handle multiple instances
             for i in range(count):
-                if count > 1:
-                    instance_name = f"{vm_name}{i + int(vm.get('network', {}).get('ip_start', '5').split('.')[-1])}"
-                else:
-                    instance_name = vm_name
+                instance_name = self._generate_vm_name(vm, i)
                 
                 # DSC extension for domain join
                 join_extension = {
@@ -1284,14 +1356,25 @@ class TemplateBuilder:
             dcr_name = dcr_info['name']
             dcr_targets = dcr_info['targets']
             
-            # Determine which VMs to install agents on
-            if not dcr_targets:
-                target_vms = [{"vmName": vm.get('name')} for vm in vms]
-            else:
-                target_vms = [{"vmName": vm.get('name')} for vm in vms if vm.get('name') in dcr_targets]
+            # Determine which VMs to install agents on and expand for multiple instances
+            vm_instances = []
+            for vm in vms:
+                # Check if this VM should have the agent installed
+                # Use suffix if available, otherwise use name
+                vm_identifier = vm.get('suffix') or vm.get('name')
+                if dcr_targets and vm_identifier not in dcr_targets:
+                    continue
+                
+                # Generate instance names for all VMs with this config
+                count = vm.get('count', 1)
+                for i in range(count):
+                    instance_name = self._generate_vm_name(vm, i)
+                    vm_instances.append({"vmName": instance_name})
             
-            if not target_vms:
+            if not vm_instances:
                 continue
+            
+            target_vms = vm_instances
             
             # Build dependencies for agent installation
             agent_dependencies = [
@@ -1355,41 +1438,45 @@ class TemplateBuilder:
             if not target_vms:
                 continue
             
-            # Create association for each VM
+            # Create association for each VM instance
             for vm in target_vms:
-                vm_name = vm.get('name')
+                count = vm.get('count', 1)
                 
-                # Build dependencies - check if VM is created directly or via nested deployment
-                association_dependencies = [
-                    f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]",
-                    f"[resourceId('Microsoft.Resources/deployments', 'installAzureMonitorAgents-{dcr_name}')]"
-                ]
-                
-                # Add dependency on domain join if AD is enabled
-                ad_config = self.config.get('active_directory', {})
-                if ad_config.get('enabled'):
-                    association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
-                
-                # If VM is a workstation (created via nested deployment), depend on that deployment
-                # Otherwise depend on the VM resource directly
-                if vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller':
-                    association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]")
-                else:
-                    association_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines', '{vm_name}')]")
-                
-                # Create DCR association - this will automatically install Azure Monitor Agent
-                association = {
-                    "type": "Microsoft.Insights/dataCollectionRuleAssociations",
-                    "apiVersion": "2021-04-01",
-                    "name": f"{vm_name}-{dcr_name}-association",
-                    "scope": f"[resourceId('Microsoft.Compute/virtualMachines', '{vm_name}')]",
-                    "dependsOn": association_dependencies,
-                    "properties": {
-                        "dataCollectionRuleId": dcr_info['id']
+                # Create associations for all instances of this VM
+                for i in range(count):
+                    instance_name = self._generate_vm_name(vm, i)
+                    
+                    # Build dependencies - check if VM is created directly or via nested deployment
+                    association_dependencies = [
+                        f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]",
+                        f"[resourceId('Microsoft.Resources/deployments', 'installAzureMonitorAgents-{dcr_name}')]"
+                    ]
+                    
+                    # Add dependency on domain join if AD is enabled
+                    ad_config = self.config.get('active_directory', {})
+                    if ad_config.get('enabled'):
+                        association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
+                    
+                    # If VM is a workstation (created via nested deployment), depend on that deployment
+                    # Otherwise depend on the VM resource directly
+                    if vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller':
+                        association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]")
+                    else:
+                        association_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]")
+                    
+                    # Create DCR association - this will automatically install Azure Monitor Agent
+                    association = {
+                        "type": "Microsoft.Insights/dataCollectionRuleAssociations",
+                        "apiVersion": "2021-04-01",
+                        "name": f"{instance_name}-{dcr_name}-association",
+                        "scope": f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]",
+                        "dependsOn": association_dependencies,
+                        "properties": {
+                            "dataCollectionRuleId": dcr_info['id']
+                        }
                     }
-                }
-                
-                self.template["resources"].append(association)
+                    
+                    self.template["resources"].append(association)
     
     def save_template(self, output_path: str):
         """

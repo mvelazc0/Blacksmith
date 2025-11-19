@@ -264,23 +264,29 @@ Examples:
         """Handle generate command."""
         print(f"Loading configuration from {args.config}...")
         
-        # Load and validate
-        loader = ConfigLoader(args.config)
-        config = loader.load()
-        
-        validator = ConfigValidator()
-        is_valid, errors, warnings = validator.validate(config)
-        
-        if not is_valid:
-            print("Configuration validation failed:")
-            for error in errors:
-                print(f"  ❌ {error}")
+        try:
+            # Load and validate
+            loader = ConfigLoader(args.config)
+            config = loader.load()
+            
+            validator = ConfigValidator()
+            is_valid, errors, warnings = validator.validate(config)
+            
+            if not is_valid:
+                print("Configuration validation failed:")
+                for error in errors:
+                    print(f"  ❌ {error}")
+                return 1
+            
+            # Generate template
+            print("Generating ARM template...")
+            builder = TemplateBuilder(config)
+            template = builder.build()
+        except Exception as e:
+            print(f"\n❌ Error during template generation: {e}")
+            import traceback
+            traceback.print_exc()
             return 1
-        
-        # Generate template
-        print("Generating ARM template...")
-        builder = TemplateBuilder(config)
-        template = builder.build()
         
         # Write output
         output_path = Path(args.output)

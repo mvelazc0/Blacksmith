@@ -180,14 +180,33 @@ properties:
     items:
       type: object
       required:
-        - name
         - type
+      oneOf:
+        - required: [name]
+        - required: [suffix]
       properties:
         name:
           type: string
           pattern: "^[a-zA-Z0-9-]+$"
           minLength: 1
           maxLength: 15
+          description: "VM name (used as prefix when count > 1 or as full name when count = 1). Either 'name' or 'suffix' must be provided."
+
+        suffix:
+          type: string
+          pattern: "^[a-zA-Z0-9-]+$"
+          minLength: 1
+          maxLength: 10
+          description: "VM naming prefix/suffix (e.g., 'srv', 'ws', 'dev'). Either 'name' or 'suffix' must be provided."
+
+        naming_pattern:
+          type: string
+          enum:
+            - "suffix-number"
+            - "number-suffix"
+            - "suffix-only"
+          default: "suffix-number"
+          description: "Naming pattern: 'suffix-number' (srv01), 'number-suffix' (01srv), 'suffix-only' (srv1)"
 
         type:
           enum:
@@ -208,6 +227,7 @@ properties:
           minimum: 1
           maximum: 100
           default: 1
+          description: "Number of VMs to create with this configuration"
 
         size:
           type: string
