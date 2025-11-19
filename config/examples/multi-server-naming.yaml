@@ -1,0 +1,166 @@
+# Blacksmith Lab Configuration
+# Scenario: Multiple Servers with Flexible Naming
+# Demonstrates the new suffix and naming_pattern features
+
+name: "multi-server-lab"
+description: "Lab demonstrating flexible VM naming with suffix and count parameters"
+location: "eastus"
+resource_group: "rg-blacksmith-naming-demo17"
+
+# Network Configuration
+network:
+  vnet_name: "vnet-lab"
+  address_space: "192.168.0.0/16"
+  
+  subnets:
+    - name: "snet-servers"
+      address_prefix: "192.168.1.0/24"
+    - name: "snet-workstations"
+      address_prefix: "192.168.2.0/24"
+  
+  nsg:
+    name: "nsg-lab"
+    rules:
+      - name: "allow-rdp"
+        priority: 100
+        direction: "Inbound"
+        access: "Allow"
+        protocol: "Tcp"
+        source_port: "*"
+        destination_port: "3381"
+        source_address: "*"
+  
+  remote_access:
+    mode: "AzureBastionHost"
+    bastion:
+      enabled: true
+      subnet_prefix: "192.168.3.0/26"
+
+# Credentials
+credentials:
+  admin_username: "labadmin"
+  admin_password: "YourSecurePassword123!"
+
+# Virtual Machines - Demonstrating different naming patterns
+virtual_machines:
+  # Domain Controller - single VM, traditional naming
+  - name: "DC01"
+    type: "windows_server"
+    role: "domain_controller"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+    network:
+      subnet: "snet-servers"
+      private_ip: "192.168.1.4"
+  
+  # Web Servers - using suffix with default pattern (suffix-number: web01, web02, web03)
+  - suffix: "web"
+    count: 1
+    naming_pattern: "suffix-number"
+    type: "windows_server"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+    network:
+      subnet: "snet-servers"
+      ip_start: "192.168.1.10"
+  
+  # Application Servers - using suffix with number-suffix pattern (01app, 02app)
+  - suffix: "app"
+    count: 1
+    naming_pattern: "number-suffix"
+    type: "windows_server"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+    network:
+      subnet: "snet-servers"
+      ip_start: "192.168.1.20"
+  
+  # Database Servers - using suffix-only pattern (db1, db2)
+  - suffix: "db"
+    count: 1
+    naming_pattern: "suffix-only"
+    type: "windows_server"
+    size: "Standard_B4ms"
+    os:
+      sku: "2019-Datacenter"
+    network:
+      subnet: "snet-servers"
+      ip_start: "192.168.1.30"
+  
+  # Development Workstations - using suffix for workstations
+  - suffix: "dev"
+    count: 1
+    naming_pattern: "suffix-number"
+    type: "windows_desktop"
+    size: "Standard_B2ms"
+    os:
+      sku: "win10-22h2-pro"
+    network:
+      subnet: "snet-workstations"
+      ip_start: "192.168.2.10"
+    depends_on:
+      - "DC01"
+
+# Active Directory Configuration
+active_directory:
+  enabled: true
+  domain_fqdn: "lab.local"
+  domain_netbios: "LAB"
+  
+  users:
+    - first_name: "Admin"
+      last_name: "User"
+      sam_account: "adminuser"
+      password: "ComplexP@ssw0rd123!"
+      department: "IT"
+      job_title: "Administrator"
+      groups: ["Domain Admins"]
+
+# Features
+features:
+  # Logging Configuration
+  logging:
+    enabled: true
+    workspace:
+      name: "multi-server-logs"
+      retention_days: 30
+      pricing_tier: "PerGB2018"
+    
+    data_collection_rules:
+      # DCR for all servers
+      - name: "dcr-servers"
+        data_sources:
+          windows_event_logs:
+            - name: "serverLogs"
+              streams:
+                - "Microsoft-Event"
+              x_path_queries:
+                - "Security!*[System[(band(Keywords,13510798882111488))]]"
+                - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
+        targets:
+          - "DC01"
+          - "web"
+          - "app"
+          - "db"
+      
+      # DCR for workstations
+      - name: "dcr-workstations"
+        data_sources:
+          windows_event_logs:
+            - name: "workstationLogs"
+              streams:
+                - "Microsoft-Event"
+              x_path_queries:
+                - "Security!*[System[(band(Keywords,13510798882111488))]]"
+                - "Application!*[System[(Level=1 or Level=2)]]"
+        targets:
+          - "dev"
+
+# Tags
+tags:
+  environment: "lab"
+  scenario: "multi-server-naming"
+  project: "blacksmith"

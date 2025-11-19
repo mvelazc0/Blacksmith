@@ -143,23 +143,7 @@ class TemplateBuilder:
         remote_access = network.get('remote_access', {})
         resources = []
         
-        # Virtual Network
-        vnet_resource = {
-            "type": "Microsoft.Network/virtualNetworks",
-            "apiVersion": "2021-05-01",
-            "name": "[variables('virtualNetworkName')]",
-            "location": "[parameters('location')]",
-            "properties": {
-                "addressSpace": {
-                    "addressPrefixes": [
-                        "[variables('virtualNetworkAddressRange')]"
-                    ]
-                }
-            }
-        }
-        resources.append(vnet_resource)
-        
-        # Subnets (including Bastion subnet if needed)
+        # Prepare subnets list (including Bastion subnet if needed)
         subnets_to_create = list(network.get('subnets', []))
         
         # Add Azure Bastion subnet if mode is AzureBastionHost
@@ -172,19 +156,30 @@ class TemplateBuilder:
                 }
                 subnets_to_create.append(bastion_subnet)
         
-        for subnet in subnets_to_create:
-            subnet_resource = {
-                "type": "Microsoft.Network/virtualNetworks/subnets",
-                "apiVersion": "2021-05-01",
-                "name": f"[concat(variables('virtualNetworkName'), '/', '{subnet.get('name')}')]",
-                "dependsOn": [
-                    "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
-                ],
-                "properties": {
-                    "addressPrefix": subnet.get('address_prefix')
-                }
+        # Virtual Network with subnets defined inline (avoids AnotherOperationInProgress errors)
+        vnet_resource = {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2021-05-01",
+            "name": "[variables('virtualNetworkName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "[variables('virtualNetworkAddressRange')]"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": subnet.get('name'),
+                        "properties": {
+                            "addressPrefix": subnet.get('address_prefix')
+                        }
+                    }
+                    for subnet in subnets_to_create
+                ]
             }
-            resources.append(subnet_resource)
+        }
+        resources.append(vnet_resource)
         
         # Network Security Group
         nsg_config = network.get('nsg', {})
@@ -384,7 +379,7 @@ class TemplateBuilder:
             "name": f"nic-{instance_name}",
             "location": "[parameters('location')]",
             "dependsOn": [
-                "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), '" + subnet_name + "')]"
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
             ],
             "properties": {
                 "ipConfigurations": [
@@ -528,7 +523,7 @@ class TemplateBuilder:
             "location": "[parameters('location')]",
             "dependsOn": [
                 "[resourceId('Microsoft.Network/publicIPAddresses', 'pip-bastion')]",
-                "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), 'AzureBastionSubnet')]"
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
             ],
             "properties": {
                 "ipConfigurations": [
@@ -572,8 +567,11 @@ class TemplateBuilder:
                 # Step 3: Update VNet DNS to point to DC
                 self._add_update_vnet_dns_deployment(dc_ip)
                 
-                # Step 4: Join workstations to domain (workstations created via nested deployment handle their own prep)
+                # Step 4: Join workstations to domain (via nested deployment)
                 self._add_domain_join_deployment(dc_name, dc_ip, ad_config)
+                
+                # Step 5: Join servers to domain (via DSC extensions)
+                self._add_server_domain_join_extensions(dc_name, dc_ip, ad_config)
     
     def _add_outputs(self):
         """Add outputs to the template."""
@@ -864,8 +862,7 @@ class TemplateBuilder:
         
         # Build dependencies list
         dependencies = [
-            "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]",
-            "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), '" + subnet_name + "')]"
+            "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
         ]
         
         # Add NSG dependency if it exists
@@ -1022,6 +1019,102 @@ class TemplateBuilder:
             }
             
             self.template["resources"].append(deployment)
+    
+    def _add_server_domain_join_extensions(self, dc_name: str, dc_ip: str, ad_config: Dict[str, Any]):
+        """Add prep and domain join extensions for servers."""
+        domain_fqdn = ad_config.get('domain_fqdn', 'blacksmith.local')
+        domain_netbios = ad_config.get('domain_netbios', 'BLACKSMITH')
+        
+        # Build OU path for servers
+        domain_parts = domain_fqdn.split('.')
+        ou_path = f"OU=Servers;DC={';DC='.join(domain_parts)}"
+        
+        # Get all server VMs that need to join the domain (not the DC itself, not workstations)
+        vms = self.config.get('virtual_machines', [])
+        servers_to_join = [
+            vm for vm in vms
+            if vm.get('role') != 'domain_controller'
+            and vm.get('type') != 'windows_desktop'
+        ]
+        
+        for vm in servers_to_join:
+            count = vm.get('count', 1)
+            
+            # Handle multiple instances
+            for i in range(count):
+                instance_name = self._generate_vm_name(vm, i)
+                
+                # Step 1: Add prep extension to install DSC modules (same as DC prep)
+                prep_extension = {
+                    "type": "Microsoft.Compute/virtualMachines/extensions",
+                    "apiVersion": "2021-11-01",
+                    "name": f"{instance_name}/SetUpServer",
+                    "location": "[parameters('location')]",
+                    "dependsOn": [
+                        f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]"
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.Compute",
+                        "type": "CustomScriptExtension",
+                        "typeHandlerVersion": "1.8",
+                        "autoUpgradeMinorVersion": True,
+                        "settings": {
+                            "fileUris": [
+                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
+                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
+                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
+                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
+                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
+                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1"
+                            ],
+                            "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Install-DSC-Modules.ps1"
+                        },
+                        "protectedSettings": {}
+                    }
+                }
+                self.template["resources"].append(prep_extension)
+                
+                # Step 2: DSC extension for domain join (depends on prep)
+                join_extension = {
+                    "type": "Microsoft.Compute/virtualMachines/extensions",
+                    "apiVersion": "2021-11-01",
+                    "name": f"{instance_name}/JoinDomain",
+                    "location": "[parameters('location')]",
+                    "dependsOn": [
+                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', 'SetUpServer')]",
+                        "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.Powershell",
+                        "type": "DSC",
+                        "typeHandlerVersion": "2.77",
+                        "autoUpgradeMinorVersion": True,
+                        "settings": {
+                            "wmfVersion": "latest",
+                            "configuration": {
+                                "url": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip",
+                                "script": "Join-Domain.ps1",
+                                "function": "Join-Domain"
+                            },
+                            "configurationArguments": {
+                                "DomainFQDN": domain_fqdn,
+                                "DomainNetbiosName": domain_netbios,
+                                "DCIPAddress": dc_ip,
+                                "JoinOU": ou_path
+                            }
+                        },
+                        "protectedSettings": {
+                            "configurationArguments": {
+                                "AdminCreds": {
+                                    "UserName": "[parameters('adminUsername')]",
+                                    "Password": "[parameters('adminPassword')]"
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                self.template["resources"].append(join_extension)
     
     def _add_domain_join_extensions(self, dc_name: str, dc_ip: str, ad_config: Dict[str, Any]):
         """Add DSC extensions to join workstations to the domain."""
@@ -1358,6 +1451,7 @@ class TemplateBuilder:
             
             # Determine which VMs to install agents on and expand for multiple instances
             vm_instances = []
+            has_workstations = False
             for vm in vms:
                 # Check if this VM should have the agent installed
                 # Use suffix if available, otherwise use name
@@ -1365,10 +1459,35 @@ class TemplateBuilder:
                 if dcr_targets and vm_identifier not in dcr_targets:
                     continue
                 
+                # Track if we're targeting workstations
+                is_workstation = vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller'
+                if is_workstation:
+                    has_workstations = True
+                
                 # Generate instance names for all VMs with this config
                 count = vm.get('count', 1)
                 for i in range(count):
-                    instance_name = self._generate_vm_name(vm, i)
+                    if is_workstation:
+                        # Workstations use Win10 template naming: prefix + ip_suffix
+                        # e.g., "dev" + "10" = "dev10"
+                        vm_network = vm.get('network', {})
+                        private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
+                        ip_suffix = int(private_ip.split('.')[-1])
+                        suffix = vm.get('suffix', '')
+                        if suffix:
+                            instance_name = f"{suffix}{ip_suffix + i}"
+                        else:
+                            configured_name = vm.get('name', 'WORKSTATION')
+                            import re
+                            match = re.match(r'^(.+?)(\d+)$', configured_name)
+                            if match:
+                                instance_name = f"{match.group(1)}{int(match.group(2)) + i}"
+                            else:
+                                instance_name = f"{configured_name}{ip_suffix + i}"
+                    else:
+                        # Regular VMs use our standard naming
+                        instance_name = self._generate_vm_name(vm, i)
+                    
                     vm_instances.append({"vmName": instance_name})
             
             if not vm_instances:
@@ -1381,9 +1500,13 @@ class TemplateBuilder:
                 f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]"
             ]
             
+            # If targeting workstations, depend on workstation deployment
+            if has_workstations:
+                agent_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]")
+            
             # Add dependency on domain join if AD is enabled
             ad_config = self.config.get('active_directory', {})
-            if ad_config.get('enabled'):
+            if ad_config.get('enabled') and has_workstations:
                 agent_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
             
             # Deploy Azure Monitor Agent extension
@@ -1433,7 +1556,8 @@ class TemplateBuilder:
             if not dcr_targets:
                 target_vms = vms
             else:
-                target_vms = [vm for vm in vms if vm.get('name') in dcr_targets]
+                # Check both suffix and name for matching
+                target_vms = [vm for vm in vms if (vm.get('suffix') or vm.get('name')) in dcr_targets]
             
             if not target_vms:
                 continue
@@ -1441,10 +1565,29 @@ class TemplateBuilder:
             # Create association for each VM instance
             for vm in target_vms:
                 count = vm.get('count', 1)
+                is_workstation = vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller'
                 
                 # Create associations for all instances of this VM
                 for i in range(count):
-                    instance_name = self._generate_vm_name(vm, i)
+                    if is_workstation:
+                        # Workstations use Win10 template naming: prefix + ip_suffix
+                        vm_network = vm.get('network', {})
+                        private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
+                        ip_suffix = int(private_ip.split('.')[-1])
+                        suffix = vm.get('suffix', '')
+                        if suffix:
+                            instance_name = f"{suffix}{ip_suffix + i}"
+                        else:
+                            configured_name = vm.get('name', 'WORKSTATION')
+                            import re
+                            match = re.match(r'^(.+?)(\d+)$', configured_name)
+                            if match:
+                                instance_name = f"{match.group(1)}{int(match.group(2)) + i}"
+                            else:
+                                instance_name = f"{configured_name}{ip_suffix + i}"
+                    else:
+                        # Regular VMs use our standard naming
+                        instance_name = self._generate_vm_name(vm, i)
                     
                     # Build dependencies - check if VM is created directly or via nested deployment
                     association_dependencies = [
@@ -1452,17 +1595,22 @@ class TemplateBuilder:
                         f"[resourceId('Microsoft.Resources/deployments', 'installAzureMonitorAgents-{dcr_name}')]"
                     ]
                     
-                    # Add dependency on domain join if AD is enabled
-                    ad_config = self.config.get('active_directory', {})
-                    if ad_config.get('enabled'):
-                        association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
-                    
                     # If VM is a workstation (created via nested deployment), depend on that deployment
                     # Otherwise depend on the VM resource directly
-                    if vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller':
+                    if is_workstation:
                         association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]")
+                        # Add dependency on workstation domain join if AD is enabled
+                        ad_config = self.config.get('active_directory', {})
+                        if ad_config.get('enabled'):
+                            association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
                     else:
+                        # Server VM - depend on the VM and its domain join extension
                         association_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]")
+                        # Add dependency on server domain join extension if AD is enabled
+                        # BUT skip domain controller - it doesn't join the domain, it creates it
+                        ad_config = self.config.get('active_directory', {})
+                        if ad_config.get('enabled') and vm.get('role') != 'domain_controller':
+                            association_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', 'JoinDomain')]")
                     
                     # Create DCR association - this will automatically install Azure Monitor Agent
                     association = {
