@@ -79,7 +79,15 @@ configuration Join-Domain {
         {
             SetScript = {
                 $DomainNetbios = $using:DomainNetbiosName
-                $GroupsToAdd = $using:LocalAdminGroups
+                
+                # Check if LocalAdminGroups parameter was provided
+                $GroupsToAdd = $null
+                try {
+                    $GroupsToAdd = $using:LocalAdminGroups
+                } catch {
+                    # LocalAdminGroups not provided, skip
+                    write-host "No local admin groups defined, skipping"
+                }
                 
                 if ($GroupsToAdd -and $GroupsToAdd.Count -gt 0)
                 {

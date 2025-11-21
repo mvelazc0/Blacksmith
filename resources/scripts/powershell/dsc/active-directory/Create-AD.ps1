@@ -1,4 +1,5 @@
 # Author: Roberto Rodriguez @Cyb3rWard0g
+# Updated by: Mauricio Velazco @mvelazco
 # License: GPLv3
 # References:
 # https://github.com/Azure/azure-quickstart-templates/blob/master/sharepoint-adfs/dsc/ConfigureDCVM.ps1
@@ -269,7 +270,15 @@ configuration Create-AD {
 
                 $DomainName = $using:domainFQDN
                 $ADServer = $using:ComputerName+"."+$DomainName
-                $NewDomainGroups = $using:DomainGroups
+                
+                # Check if DomainGroups parameter was provided
+                $NewDomainGroups = $null
+                try {
+                    $NewDomainGroups = $using:DomainGroups
+                } catch {
+                    # DomainGroups not provided, skip group creation
+                    write-host "No domain groups defined, skipping group creation"
+                }
                 
                 if ($NewDomainGroups -and $NewDomainGroups.Count -gt 0)
                 {
