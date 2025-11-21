@@ -29,6 +29,13 @@
         "joinOU": {
             "type": "string"
         },
+        "localAdminGroups": {
+            "type": "array",
+            "defaultValue": [],
+            "metadata": {
+                "description": "AD groups to add to local Administrators"
+            }
+        },
         "location": {
             "type": "string",
             "metadata": {
@@ -62,7 +69,8 @@
                         "DomainFQDN": "[parameters('DomainFQDN')]",
                         "DomainNetbiosName": "[parameters('domainNetbiosName')]",
                         "DCIPAddress": "[parameters('dcIpAddress')]",
-                        "JoinOU": "[parameters('joinOU')]"
+                        "JoinOU": "[parameters('joinOU')]",
+                        "LocalAdminGroups": "[parameters('localAdminGroups')]"
                     }
                 },
                 "protectedSettings": {

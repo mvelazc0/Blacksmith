@@ -1,0 +1,217 @@
+# Blacksmith Lab Configuration
+# Scenario: AD Groups with Granular Local Admin Delegation
+# Demonstrates creating AD groups and assigning local admin rights based on VM type, role, suffix, or name
+
+name: "ad-groups-admin-lab"
+description: "Lab demonstrating AD groups with granular local administrator delegation for attack path scenarios"
+location: "eastus"
+resource_group: "rg-blacksmith-admin-groups"
+
+# Network Configuration
+network:
+  vnet_name: "vnet-lab"
+  address_space: "192.168.0.0/16"
+  
+  subnets:
+    - name: "snet-servers"
+      address_prefix: "192.168.1.0/24"
+    - name: "snet-workstations"
+      address_prefix: "192.168.2.0/24"
+  
+  nsg:
+    name: "nsg-lab"
+    rules:
+      - name: "allow-rdp"
+        priority: 100
+        direction: "Inbound"
+        access: "Allow"
+        protocol: "Tcp"
+        source_port: "*"
+        destination_port: "3389"
+        source_address: "*"
+  
+  remote_access:
+    mode: "AzureBastionHost"
+    bastion:
+      enabled: true
+      subnet_prefix: "192.168.3.0/26"
+
+# Credentials
+credentials:
+  admin_username: "labadmin"
+  admin_password: "YourSecurePassword123!"
+
+# Virtual Machines
+virtual_machines:
+  # Domain Controller
+  - name: "DC01"
+    type: "windows_server"
+    role: "domain_controller"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+    network:
+      subnet: "snet-servers"
+      private_ip: "192.168.1.4"
+  
+  # Web Servers
+  - suffix: "web"
+    count: 1
+    naming_pattern: "suffix-number"
+    type: "windows_server"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+    network:
+      subnet: "snet-servers"
+      ip_start: "192.168.1.10"
+  
+  # Database Servers
+  - suffix: "db"
+    count: 1
+    naming_pattern: "suffix-number"
+    type: "windows_server"
+    size: "Standard_B4ms"
+    os:
+      sku: "2019-Datacenter"
+    network:
+      subnet: "snet-servers"
+      ip_start: "192.168.1.20"
+  
+  # Development Workstations
+  - suffix: "dev"
+    count: 1
+    naming_pattern: "suffix-number"
+    type: "windows_desktop"
+    size: "Standard_B2ms"
+    os:
+      sku: "win10-22h2-pro"
+    network:
+      subnet: "snet-workstations"
+      ip_start: "192.168.2.10"
+
+# Active Directory Configuration
+active_directory:
+  enabled: true
+  domain_fqdn: "corp.local"
+  domain_netbios: "CORP"
+  
+  # Define AD Groups with granular local admin targeting
+  groups:
+    # Tier 1: Broad access groups
+    - name: "Server Admins"
+      description: "Administrators for all servers"
+      scope: "Global"
+      members: ["alice"]
+      local_admin_on:
+        - type: "windows_server"  # Local admin on ALL servers
+    
+    - name: "Workstation Admins"
+      description: "Administrators for all workstations"
+      scope: "Global"
+      members: ["charlie"]
+      local_admin_on:
+        - type: "windows_desktop"  # Local admin on ALL workstations
+    
+    # Tier 2: Role-specific groups
+    - name: "DB Admins"
+      description: "Database administrators"
+      scope: "Global"
+      members: ["dave", "eve"]
+      local_admin_on:
+        - suffix: "db"  # Local admin only on db01, db02
+    
+    - name: "Web Admins"
+      description: "Web server administrators"
+      scope: "Global"
+      members: ["frank"]
+      local_admin_on:
+        - suffix: "web"  # Local admin only on web01, web02
+    
+    # Tier 3: Specific VM access (for targeted attack paths)
+    - name: "DB01 Operators"
+      description: "Operators for primary database only"
+      scope: "Global"
+      members: ["bob"]
+      local_admin_on:
+        - name: "db01"  # Local admin ONLY on db01 (not db02)
+  
+  # Define domain users
+  users:
+    # Tier 1 - Broad access
+    - first_name: "Alice"
+      last_name: "Admin"
+      sam_account: "alice"
+      password: "ComplexP@ssw0rd1!"
+      department: "IT"
+      job_title: "Server Administrator"
+      groups: ["Server Admins"]
+    
+    - first_name: "Charlie"
+      last_name: "Desktop"
+      sam_account: "charlie"
+      password: "ComplexP@ssw0rd2!"
+      department: "IT"
+      job_title: "Desktop Administrator"
+      groups: ["Workstation Admins"]
+    
+    # Tier 2 - Role-specific
+    - first_name: "Dave"
+      last_name: "Database"
+      sam_account: "dave"
+      password: "ComplexP@ssw0rd3!"
+      department: "Database"
+      job_title: "DBA"
+      groups: ["DB Admins"]
+    
+    - first_name: "Eve"
+      last_name: "Database"
+      sam_account: "eve"
+      password: "ComplexP@ssw0rd4!"
+      department: "Database"
+      job_title: "Junior DBA"
+      groups: ["DB Admins"]
+    
+    - first_name: "Frank"
+      last_name: "Web"
+      sam_account: "frank"
+      password: "ComplexP@ssw0rd5!"
+      department: "Web"
+      job_title: "Web Administrator"
+      groups: ["Web Admins"]
+    
+    # Tier 3 - Specific access
+    - first_name: "Bob"
+      last_name: "Operator"
+      sam_account: "bob"
+      password: "ComplexP@ssw0rd6!"
+      department: "Operations"
+      job_title: "Database Operator"
+      groups: ["DB01 Operators"]
+
+# Features
+features:
+  logging:
+    enabled: true
+    workspace:
+      name: "admin-groups-logs"
+      retention_days: 30
+      pricing_tier: "PerGB2018"
+    
+    data_collection_rules:
+      - name: "dcr-all-vms"
+        data_sources:
+          windows_event_logs:
+            - name: "securityLogs"
+              streams:
+                - "Microsoft-Event"
+              x_path_queries:
+                - "Security!*[System[(band(Keywords,13510798882111488))]]"
+                - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
+
+# Tags
+tags:
+  environment: "lab"
+  scenario: "admin-delegation"
+  purpose: "attack-path-training"
+  project: "blacksmith"

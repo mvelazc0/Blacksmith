@@ -297,6 +297,51 @@ properties:
         pattern: "^[a-zA-Z0-9]+$"
         maxLength: 15
 
+      groups:
+        type: array
+        items:
+          type: object
+          required:
+            - name
+          properties:
+            name:
+              type: string
+              pattern: "^[a-zA-Z0-9 ]+$"
+              maxLength: 64
+              description: "AD group name"
+            description:
+              type: string
+              maxLength: 256
+            scope:
+              type: string
+              enum: [DomainLocal, Global, Universal]
+              default: Global
+            members:
+              type: array
+              items:
+                type: string
+              description: "SAM account names of users to add to this group"
+            local_admin_on:
+              type: array
+              items:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    enum: [windows_server, windows_desktop, linux]
+                    description: "Grant local admin on all VMs of this type"
+                  role:
+                    type: string
+                    enum: [domain_controller, adfs, wec, exchange, generic]
+                    description: "Grant local admin on all VMs with this role"
+                  suffix:
+                    type: string
+                    description: "Grant local admin on all VMs with this suffix"
+                  name:
+                    type: string
+                    description: "Grant local admin on specific VM by name"
+              description: "Define which VMs this group should have local admin rights on"
+
       users:
         type: array
         items:

@@ -20,6 +20,13 @@
         "domainUsers": {
             "type": "secureObject"
         },
+        "domainGroups": {
+            "type": "secureObject",
+            "defaultValue": {"array": []},
+            "metadata": {
+                "description": "AD groups to create with members"
+            }
+        },
         "location": {
             "type": "string",
             "metadata": {
@@ -55,7 +62,8 @@
                             "UserName": "[parameters('adminUsername')]",
                             "Password": "[parameters('adminPassword')]"
                         },
-                        "DomainUsers": "[parameters('domainUsers').array]"
+                        "DomainUsers": "[parameters('domainUsers').array]",
+                        "DomainGroups": "[parameters('domainGroups').array]"
                     }
                 }
             }

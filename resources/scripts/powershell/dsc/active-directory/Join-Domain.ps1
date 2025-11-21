@@ -1,8 +1,8 @@
 # Author: Roberto Rodriguez @Cyb3rWard0g
 # License: GPLv3
 configuration Join-Domain {
-    param 
-    ( 
+    param
+    (
         [Parameter(Mandatory)]
         [String]$DomainFQDN,
 
@@ -16,8 +16,11 @@ configuration Join-Domain {
         [String]$DCIPAddress,
 
         [Parameter(Mandatory)]
-        [String]$JoinOU
-    ) 
+        [String]$JoinOU,
+
+        [Parameter(Mandatory=$false)]
+        [String[]]$LocalAdminGroups
+    )
     
     Import-DscResource -ModuleName NetworkingDsc, ActiveDirectoryDsc, xPSDesiredStateConfiguration, ComputerManagementDsc
 
@@ -66,9 +69,53 @@ configuration Join-Domain {
         }
 
         PendingReboot RebootAfterJoiningDomain
-        { 
+        {
             Name = "RebootServer"
             DependsOn = "[Computer]JoinDomain"
+        }
+
+        # ***** Add AD Groups to Local Administrators *****
+        xScript AddGroupsToLocalAdmins
+        {
+            SetScript = {
+                $DomainNetbios = $using:DomainNetbiosName
+                $GroupsToAdd = $using:LocalAdminGroups
+                
+                if ($GroupsToAdd -and $GroupsToAdd.Count -gt 0)
+                {
+                    foreach ($GroupName in $GroupsToAdd)
+                    {
+                        $DomainGroup = "$DomainNetbios\$GroupName"
+                        
+                        try {
+                            # Check if group is already a member
+                            $LocalAdmins = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue
+                            $IsMember = $LocalAdmins | Where-Object {$_.Name -eq $DomainGroup}
+                            
+                            if (-not $IsMember)
+                            {
+                                write-host "Adding $DomainGroup to local Administrators..."
+                                Add-LocalGroupMember -Group "Administrators" -Member $DomainGroup -ErrorAction Stop
+                                write-host "Successfully added $DomainGroup to local Administrators"
+                            }
+                            else
+                            {
+                                write-host "$DomainGroup is already a member of local Administrators"
+                            }
+                        }
+                        catch {
+                            write-host "Error adding $DomainGroup to local Administrators: $_"
+                        }
+                    }
+                }
+            }
+            GetScript = {
+                return @{ "Result" = "false" }
+            }
+            TestScript = {
+                return $false
+            }
+            DependsOn = "[PendingReboot]RebootAfterJoiningDomain"
         }
     }
 }

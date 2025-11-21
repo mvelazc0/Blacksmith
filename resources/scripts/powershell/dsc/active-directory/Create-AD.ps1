@@ -3,8 +3,8 @@
 # References:
 # https://github.com/Azure/azure-quickstart-templates/blob/master/sharepoint-adfs/dsc/ConfigureDCVM.ps1
 configuration Create-AD {
-    param 
-    ( 
+    param
+    (
         [Parameter(Mandatory)]
         [String]$DomainFQDN,
 
@@ -15,8 +15,11 @@ configuration Create-AD {
         [System.Management.Automation.PSCredential]$AdminCreds,
 
         [Parameter(Mandatory)]
-        [Object]$DomainUsers
-    ) 
+        [Object]$DomainUsers,
+
+        [Parameter(Mandatory=$false)]
+        [Object]$DomainGroups
+    )
     
     Import-DscResource -ModuleName ActiveDirectoryDsc, NetworkingDsc, xPSDesiredStateConfiguration, xDnsServer, ComputerManagementDsc
     
@@ -247,6 +250,93 @@ configuration Create-AD {
                 return $false
             }
             DependsOn = "[xScript]CreateOUs"
+        }
+
+        # ***** Create Domain Groups *****
+        xScript CreateDomainGroups
+        {
+            SetScript = {
+                # Verifying ADWS service is running
+                $ServiceName = 'ADWS'
+                $arrService = Get-Service -Name $ServiceName
+
+                while ($arrService.Status -ne 'Running')
+                {
+                    Start-Service $ServiceName
+                    Start-Sleep -seconds 5
+                    $arrService.Refresh()
+                }
+
+                $DomainName = $using:domainFQDN
+                $ADServer = $using:ComputerName+"."+$DomainName
+                $NewDomainGroups = $using:DomainGroups
+                
+                if ($NewDomainGroups -and $NewDomainGroups.Count -gt 0)
+                {
+                    foreach ($DomainGroup in $NewDomainGroups)
+                    {
+                        $GroupName = $DomainGroup.Name
+                        $GroupScope = $DomainGroup.Scope
+                        $GroupDescription = $DomainGroup.Description
+                        $GroupMembers = $DomainGroup.Members
+                        
+                        # Check if group exists
+                        $GroupExists = Get-ADGroup -LDAPFilter "(sAMAccountName=$GroupName)" -Server $ADServer -ErrorAction SilentlyContinue
+                        
+                        if ($GroupExists -eq $Null)
+                        {
+                            write-host "Creating group $GroupName ..."
+                            New-ADGroup -Name $GroupName `
+                                -SamAccountName $GroupName `
+                                -GroupScope $GroupScope `
+                                -Description $GroupDescription `
+                                -Path $using:DCPathString `
+                                -Server $ADServer
+                        }
+                        else
+                        {
+                            write-host "Group $GroupName already exists"
+                        }
+                        
+                        # Add members to group
+                        if ($GroupMembers -and $GroupMembers.Count -gt 0)
+                        {
+                            foreach ($Member in $GroupMembers)
+                            {
+                                # Check if user exists before adding
+                                $UserExists = Get-ADUser -LDAPFilter "(sAMAccountName=$Member)" -Server $ADServer -ErrorAction SilentlyContinue
+                                if ($UserExists)
+                                {
+                                    # Check if already a member
+                                    $IsMember = Get-ADGroupMember -Identity $GroupName -Server $ADServer | Where-Object {$_.SamAccountName -eq $Member}
+                                    if (-not $IsMember)
+                                    {
+                                        write-host "Adding $Member to $GroupName ..."
+                                        Add-ADGroupMember -Identity $GroupName -Members $Member -Server $ADServer
+                                    }
+                                    else
+                                    {
+                                        write-host "$Member is already a member of $GroupName"
+                                    }
+                                }
+                                else
+                                {
+                                    write-host "Warning: User $Member does not exist, skipping..."
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            GetScript =
+            {
+                return @{ "Result" = "false" }
+            }
+            TestScript =
+            {
+                return $false
+            }
+            DependsOn = "[xScript]CreateDomainUsers"
         }
     }
 }

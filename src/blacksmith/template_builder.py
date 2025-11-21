@@ -603,17 +603,17 @@ class TemplateBuilder:
                 "autoUpgradeMinorVersion": True,
                 "settings": {
                     "fileUris": [
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/auditing/Enable-WinAuditCategories.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/auditing/Enable-PowerShell-Logging.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-WinAuditCategories.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-PowerShell-Logging.ps1",
                         "https://raw.githubusercontent.com/OTRF/Set-AuditRule/master/Set-AuditRule.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/auditing/Set-SACLs.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Set-WallPaper.ps1"
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Set-SACLs.ps1",
+                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Set-WallPaper.ps1"
                     ],
                     "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Set-Initial-Settings.ps1 -SetupType DC"
                 },
@@ -655,17 +655,17 @@ class TemplateBuilder:
                         "autoUpgradeMinorVersion": True,
                         "settings": {
                             "fileUris": [
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/auditing/Enable-WinAuditCategories.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/auditing/Enable-PowerShell-Logging.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-WinAuditCategories.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-PowerShell-Logging.ps1",
                                 "https://raw.githubusercontent.com/OTRF/Set-AuditRule/master/Set-AuditRule.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/auditing/Set-SACLs.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Set-WallPaper.ps1"
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Set-SACLs.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Set-WallPaper.ps1"
                             ],
                             "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Set-Initial-Settings.ps1"
                         },
@@ -694,6 +694,17 @@ class TemplateBuilder:
                 "UserContainer": "DomainUsers"
             })
         
+        # Prepare domain groups array
+        groups = ad_config.get('groups', [])
+        domain_groups_array = []
+        for group in groups:
+            domain_groups_array.append({
+                "Name": group.get('name'),
+                "Description": group.get('description', ''),
+                "Scope": group.get('scope', 'Global'),
+                "Members": group.get('members', [])
+            })
+        
         # Nested deployment that calls the existing createADForest template
         deployment = {
             "type": "Microsoft.Resources/deployments",
@@ -705,7 +716,7 @@ class TemplateBuilder:
             "properties": {
                 "mode": "Incremental",
                 "templateLink": {
-                    "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/nestedtemplates/createADForest.json",
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/nestedtemplates/createADForest.json",
                     "contentVersion": "1.0.0.0"
                 },
                 "parameters": {
@@ -713,7 +724,7 @@ class TemplateBuilder:
                         "value": dc_name
                     },
                     "createADForestScript": {
-                        "value": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/dsc/active-directory/Create-AD.zip"
+                        "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Create-AD.zip"
                     },
                     "domainFQDN": {
                         "value": domain_fqdn
@@ -726,6 +737,9 @@ class TemplateBuilder:
                     },
                     "domainUsers": {
                         "value": {"array": domain_users_array}
+                    },
+                    "domainGroups": {
+                        "value": {"array": domain_groups_array}
                     },
                     "location": {
                         "value": "[parameters('location')]"
@@ -774,7 +788,7 @@ class TemplateBuilder:
             "properties": {
                 "mode": "Incremental",
                 "templateLink": {
-                    "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD/nestedtemplates/vnet-dns-server.json",
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD/nestedtemplates/vnet-dns-server.json",
                     "contentVersion": "1.0.0.0"
                 },
                 "parameters": {
@@ -880,7 +894,7 @@ class TemplateBuilder:
             "properties": {
                 "mode": "Incremental",
                 "templateLink": {
-                    "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10/azuredeploy.json",
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10/azuredeploy.json",
                     "contentVersion": "1.0.0.0"
                 },
                 "parameters": {
@@ -967,9 +981,14 @@ class TemplateBuilder:
         
         # Check if we have workstations to join
         vms = self.config.get('virtual_machines', [])
-        has_workstations = any(vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop' for vm in vms)
+        workstation_vms = [vm for vm in vms if vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop']
+        has_workstations = len(workstation_vms) > 0
         
         if has_workstations:
+            # Get local admin groups for workstations (use first workstation config as representative)
+            workstation_vm = workstation_vms[0]
+            local_admin_groups = self._get_local_admin_groups_for_vm(workstation_vm)
+            
             # Nested deployment that calls the existing joinDomain template
             # Uses output from deployWorkstations nested deployment
             deployment = {
@@ -983,7 +1002,7 @@ class TemplateBuilder:
                 "properties": {
                     "mode": "Incremental",
                     "templateLink": {
-                        "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD/nestedtemplates/joinDomain.json",
+                        "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD/nestedtemplates/joinDomain.json",
                         "contentVersion": "1.0.0.0"
                     },
                     "parameters": {
@@ -991,7 +1010,7 @@ class TemplateBuilder:
                             "value": "[reference('deployWorkstations').outputs.allWinVMsDeployed.value]"
                         },
                         "joinDomainScript": {
-                            "value": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip"
+                            "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip"
                         },
                         "domainFQDN": {
                             "value": domain_fqdn
@@ -1011,6 +1030,9 @@ class TemplateBuilder:
                         "joinOU": {
                             "value": ou_path
                         },
+                        "localAdminGroups": {
+                            "value": local_admin_groups
+                        },
                         "location": {
                             "value": "[parameters('location')]"
                         }
@@ -1019,6 +1041,55 @@ class TemplateBuilder:
             }
             
             self.template["resources"].append(deployment)
+    
+    def _get_local_admin_groups_for_vm(self, vm: Dict[str, Any], instance_name: str = None) -> List[str]:
+        """
+        Determine which AD groups should be local administrators on this VM.
+        
+        Args:
+            vm: VM configuration dictionary
+            instance_name: Actual VM instance name (e.g., "db01" for a VM with suffix "db")
+            
+        Returns:
+            List of AD group names that should be local admins
+        """
+        ad_config = self.config.get('active_directory', {})
+        groups = ad_config.get('groups', [])
+        local_admin_groups = []
+        
+        vm_type = vm.get('type')
+        vm_role = vm.get('role')
+        vm_suffix = vm.get('suffix')
+        vm_name = vm.get('name')
+        
+        # Use instance_name if provided, otherwise fall back to vm_name
+        actual_vm_name = instance_name if instance_name else vm_name
+        
+        for group in groups:
+            local_admin_on = group.get('local_admin_on', [])
+            group_name = group.get('name')
+            
+            # Check if this VM matches ANY of the group's targets
+            should_add_group = False
+            for target in local_admin_on:
+                # Check each targeting criterion
+                if target.get('type') and target.get('type') == vm_type:
+                    should_add_group = True
+                    break
+                if target.get('role') and target.get('role') == vm_role:
+                    should_add_group = True
+                    break
+                if target.get('suffix') and target.get('suffix') == vm_suffix:
+                    should_add_group = True
+                    break
+                if target.get('name') and target.get('name') == actual_vm_name:
+                    should_add_group = True
+                    break
+            
+            if should_add_group:
+                local_admin_groups.append(group_name)
+        
+        return local_admin_groups
     
     def _add_server_domain_join_extensions(self, dc_name: str, dc_ip: str, ad_config: Dict[str, Any]):
         """Add prep and domain join extensions for servers."""
@@ -1044,6 +1115,9 @@ class TemplateBuilder:
             for i in range(count):
                 instance_name = self._generate_vm_name(vm, i)
                 
+                # Determine which groups should be local admins on THIS SPECIFIC VM instance
+                local_admin_groups = self._get_local_admin_groups_for_vm(vm, instance_name)
+                
                 # Step 1: Add prep extension to install DSC modules (same as DC prep)
                 prep_extension = {
                     "type": "Microsoft.Compute/virtualMachines/extensions",
@@ -1060,12 +1134,12 @@ class TemplateBuilder:
                         "autoUpgradeMinorVersion": True,
                         "settings": {
                             "fileUris": [
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
-                                "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1"
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1"
                             ],
                             "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Install-DSC-Modules.ps1"
                         },
@@ -1092,7 +1166,7 @@ class TemplateBuilder:
                         "settings": {
                             "wmfVersion": "latest",
                             "configuration": {
-                                "url": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip",
+                                "url": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip",
                                 "script": "Join-Domain.ps1",
                                 "function": "Join-Domain"
                             },
@@ -1100,7 +1174,8 @@ class TemplateBuilder:
                                 "DomainFQDN": domain_fqdn,
                                 "DomainNetbiosName": domain_netbios,
                                 "DCIPAddress": dc_ip,
-                                "JoinOU": ou_path
+                                "JoinOU": ou_path,
+                                "LocalAdminGroups": local_admin_groups
                             }
                         },
                         "protectedSettings": {
@@ -1154,7 +1229,7 @@ class TemplateBuilder:
                         "settings": {
                             "wmfVersion": "latest",
                             "configuration": {
-                                "url": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip",
+                                "url": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip",
                                 "script": "Join-Domain.ps1",
                                 "function": "Join-Domain"
                             },
@@ -1224,7 +1299,7 @@ class TemplateBuilder:
             "properties": {
                 "mode": "Incremental",
                 "templateLink": {
-                    "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Log-Analytics-Workspace/azuredeploy.json",
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Log-Analytics-Workspace/azuredeploy.json",
                     "contentVersion": "1.0.0.0"
                 },
                 "parameters": {
@@ -1518,7 +1593,7 @@ class TemplateBuilder:
                 "properties": {
                     "mode": "Incremental",
                     "templateLink": {
-                        "uri": "https://raw.githubusercontent.com/OTRF/Blacksmith/master/templates/azure/Azure-Monitor-Agents/windows.json",
+                        "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Azure-Monitor-Agents/windows.json",
                         "contentVersion": "1.0.0.0"
                     },
                     "parameters": {
