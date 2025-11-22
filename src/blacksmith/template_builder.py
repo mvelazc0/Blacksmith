@@ -50,6 +50,9 @@ class TemplateBuilder:
         # Add compute resources
         self._add_compute_resources()
         
+        # Add attack VM (if enabled)
+        self._add_attack_vm()
+        
         # Add service configurations
         self._add_service_resources()
         
@@ -326,6 +329,220 @@ class TemplateBuilder:
         
         # Add workstations via nested deployment
         self._add_workstations_deployment()
+    
+    def _add_attack_vm(self):
+        """Add attack VM for red team exercises if enabled."""
+        attack_vm_config = self.config.get('attack_vm', {})
+        
+        if not attack_vm_config.get('enabled', False):
+            return
+        
+        vm_name = attack_vm_config.get('name', 'KALI01')
+        vm_type = attack_vm_config.get('type', 'kali')
+        vm_size = attack_vm_config.get('size', 'Standard_B2ms')
+        vm_network = attack_vm_config.get('network', {})
+        subnet_name = vm_network.get('subnet', 'snet-attack')
+        private_ip = vm_network.get('private_ip', '192.168.4.10')
+        
+        # Get OS configuration
+        os_config = attack_vm_config.get('os', {})
+        
+        # Determine image reference based on type
+        if vm_type == 'kali':
+            # Kali Linux from Azure Marketplace
+            # Verified with: az vm image list --publisher kali-linux --all
+            image_ref = {
+                "publisher": os_config.get('publisher', 'kali-linux'),
+                "offer": os_config.get('offer', 'kali'),
+                "sku": os_config.get('sku', 'kali-2025-3'),  # Latest x64 version
+                "version": os_config.get('version', 'latest')
+            }
+        else:  # ubuntu
+            # Ubuntu Server
+            image_ref = {
+                "publisher": os_config.get('publisher', 'Canonical'),
+                "offer": os_config.get('offer', '0001-com-ubuntu-server-jammy'),
+                "sku": os_config.get('sku', '22_04-lts-gen2'),
+                "version": os_config.get('version', 'latest')
+            }
+        
+        # Create NIC for attack VM
+        nic_resource = {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2021-05-01",
+            "name": f"nic-{vm_name}",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
+            ],
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "privateIPAllocationMethod": "Static",
+                            "privateIPAddress": private_ip,
+                            "subnet": {
+                                "id": f"[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), '{subnet_name}')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+        self.template["resources"].append(nic_resource)
+        
+        # Create attack VM
+        vm_resource = {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2021-11-01",
+            "name": vm_name,
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                f"[resourceId('Microsoft.Network/networkInterfaces', 'nic-{vm_name}')]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+            ],
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": vm_size
+                },
+                "osProfile": {
+                    "computerName": vm_name,
+                    "adminUsername": "[parameters('adminUsername')]",
+                    "adminPassword": "[parameters('adminPassword')]",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": False
+                    }
+                },
+                "storageProfile": {
+                    "imageReference": image_ref,
+                    "osDisk": {
+                        "createOption": "FromImage",
+                        "managedDisk": {
+                            "storageAccountType": "Premium_LRS"
+                        }
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": f"[resourceId('Microsoft.Network/networkInterfaces', 'nic-{vm_name}')]"
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": True,
+                        "storageUri": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))).primaryEndpoints.blob]"
+                    }
+                }
+            }
+        }
+        
+        # Add plan information for Marketplace images (required for Kali Linux)
+        if vm_type == 'kali':
+            vm_resource["plan"] = {
+                "name": image_ref["sku"],
+                "publisher": image_ref["publisher"],
+                "product": image_ref["offer"]
+            }
+        self.template["resources"].append(vm_resource)
+        
+        # Add custom script extension if tools or custom scripts are specified
+        tools = attack_vm_config.get('tools', [])
+        custom_scripts = attack_vm_config.get('custom_scripts', [])
+        
+        if tools or custom_scripts:
+            self._add_attack_vm_setup_extension(vm_name, vm_type, tools, custom_scripts)
+    
+    def _add_attack_vm_setup_extension(self, vm_name: str, vm_type: str, tools: List[str], custom_scripts: List[str]):
+        """Add custom script extension to setup attack tools on the attack VM."""
+        
+        # Build installation script based on tools requested
+        install_commands = []
+        
+        if vm_type == 'kali':
+            # Kali Linux already has most tools, just update and install specific ones
+            install_commands.append("apt-get update")
+            
+            tool_packages = {
+                'metasploit': 'metasploit-framework',
+                'bloodhound': 'bloodhound',
+                'impacket': 'python3-impacket',
+                'crackmapexec': 'crackmapexec',
+                'responder': 'responder',
+                'nmap': 'nmap',
+                'gobuster': 'gobuster',
+                'sqlmap': 'sqlmap',
+                'john': 'john',
+                'hashcat': 'hashcat',
+                'burpsuite': 'burpsuite',
+                'wireshark': 'wireshark'
+            }
+            
+            for tool in tools:
+                if tool in tool_packages:
+                    install_commands.append(f"apt-get install -y {tool_packages[tool]}")
+                elif tool == 'mimikatz':
+                    # Mimikatz needs special handling (Windows tool, but useful for reference)
+                    install_commands.append("wget https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip -O /opt/mimikatz.zip")
+                    install_commands.append("unzip /opt/mimikatz.zip -d /opt/mimikatz")
+        else:  # ubuntu
+            # Ubuntu needs more tools installed
+            install_commands.append("export DEBIAN_FRONTEND=noninteractive")
+            install_commands.append("apt-get update")
+            # Use python3-pip from universe repository (already enabled in Ubuntu 22.04)
+            install_commands.append("apt-get install -y python3 python3-pip git curl wget unzip")
+            
+            tool_install = {
+                'metasploit': "curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > /tmp/msfinstall && chmod 755 /tmp/msfinstall && /tmp/msfinstall",
+                'bloodhound': "wget https://github.com/BloodHoundAD/BloodHound/releases/latest/download/BloodHound-linux-x64.zip -O /tmp/bloodhound.zip && unzip /tmp/bloodhound.zip -d /opt/bloodhound",
+                'impacket': "python3 -m pip install impacket",
+                'crackmapexec': "python3 -m pip install pipx && pipx install crackmapexec",
+                'responder': "git clone https://github.com/lgandx/Responder.git /opt/Responder && python3 -m pip install -r /opt/Responder/requirements.txt",
+                'nmap': "apt-get install -y nmap",
+                'gobuster': "apt-get install -y gobuster",
+                'sqlmap': "apt-get install -y sqlmap",
+                'john': "apt-get install -y john",
+                'hashcat': "apt-get install -y hashcat",
+                'mimikatz': "wget https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip -O /opt/mimikatz.zip && unzip /opt/mimikatz.zip -d /opt/mimikatz"
+            }
+            
+            for tool in tools:
+                if tool in tool_install:
+                    install_commands.append(tool_install[tool])
+        
+        # Add custom scripts
+        for script_url in custom_scripts:
+            script_name = script_url.split('/')[-1]
+            install_commands.append(f"wget {script_url} -O /tmp/{script_name}")
+            install_commands.append(f"chmod +x /tmp/{script_name}")
+            install_commands.append(f"bash /tmp/{script_name}")
+        
+        # Create the command to execute
+        command_to_execute = " && ".join(install_commands) if install_commands else "echo 'No tools to install'"
+        
+        # Create custom script extension
+        extension = {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "2021-11-01",
+            "name": f"{vm_name}/SetupAttackTools",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                f"[resourceId('Microsoft.Compute/virtualMachines', '{vm_name}')]"
+            ],
+            "properties": {
+                "publisher": "Microsoft.Azure.Extensions",
+                "type": "CustomScript",
+                "typeHandlerVersion": "2.1",
+                "autoUpgradeMinorVersion": True,
+                "settings": {
+                    "commandToExecute": command_to_execute
+                }
+            }
+        }
+        
+        self.template["resources"].append(extension)
     
     def _calculate_vm_ip(self, vm: Dict[str, Any], index: int) -> str:
         """

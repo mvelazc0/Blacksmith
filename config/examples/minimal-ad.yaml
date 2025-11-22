@@ -4,8 +4,8 @@
 
 name: "minimal-ad-lab"
 description: "Minimal Active Directory lab with one DC and one workstation"
-location: "eastus"
-resource_group: "rg-blacksmith-minimal018"
+location: "westus2"
+resource_group: "rg-blacksmith-minimal019"
 
 # Network Configuration
 network:
