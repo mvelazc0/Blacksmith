@@ -547,6 +547,7 @@ properties:
                     type: string
                   description: "VM names to apply DCR to (empty means all VMs)"
 
+<<<<<<< HEAD
   # Multi-Domain Configuration (new)
   domains:
     type: array
@@ -792,6 +793,101 @@ properties:
           type: boolean
           default: false
           description: "Enable selective authentication"
+=======
+  attack_vm:
+    type: object
+    description: "Optional attack VM for red team exercises"
+    properties:
+      enabled:
+        type: boolean
+        default: false
+        description: "Enable attack VM deployment"
+      
+      name:
+        type: string
+        pattern: "^[a-zA-Z0-9-]+$"
+        minLength: 1
+        maxLength: 15
+        description: "Attack VM name"
+      
+      type:
+        type: string
+        enum: [kali, ubuntu]
+        default: kali
+        description: "Attack VM type: kali (Kali Linux) or ubuntu (Ubuntu Server)"
+      
+      size:
+        type: string
+        enum:
+          - Standard_B2s
+          - Standard_B2ms
+          - Standard_B4ms
+          - Standard_B8ms
+          - Standard_D2_v3
+          - Standard_D4_v3
+          - Standard_D8_v3
+        default: Standard_B2ms
+        description: "VM size"
+      
+      os:
+        type: object
+        description: "OS image configuration"
+        properties:
+          publisher:
+            type: string
+            description: "Image publisher"
+          offer:
+            type: string
+            description: "Image offer"
+          sku:
+            type: string
+            description: "Image SKU"
+          version:
+            type: string
+            default: latest
+            description: "Image version"
+      
+      network:
+        type: object
+        required:
+          - subnet
+        properties:
+          subnet:
+            type: string
+            description: "Subnet name for attack VM"
+          private_ip:
+            type: string
+            pattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}$"
+            description: "Static private IP address"
+      
+      tools:
+        type: array
+        description: "List of attack tools to pre-install"
+        items:
+          type: string
+          enum:
+            - metasploit
+            - bloodhound
+            - impacket
+            - crackmapexec
+            - responder
+            - mimikatz
+            - nmap
+            - gobuster
+            - sqlmap
+            - john
+            - hashcat
+            - burpsuite
+            - wireshark
+      
+      custom_scripts:
+        type: array
+        description: "Custom scripts to run on first boot"
+        items:
+          type: string
+          format: uri
+          description: "URL to custom script"
+>>>>>>> 918391b5b1273677b5a06413c2e1eed7915747f5
 
   tags:
     type: object
