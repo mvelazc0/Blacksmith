@@ -80,7 +80,7 @@
           "configuration": {
             "url": "[parameters('createChildDomainScript')]",
             "script": "Create-Child-Domain.ps1",
-            "function": "Create-Child-Domain"
+            "function": "CreateChildDomain"
           },
           "configurationArguments": {
             "ChildDomainName": "[parameters('childDomainName')]",

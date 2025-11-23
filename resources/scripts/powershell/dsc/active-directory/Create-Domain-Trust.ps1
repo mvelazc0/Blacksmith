@@ -4,7 +4,7 @@
 # References:
 # - https://docs.microsoft.com/en-us/powershell/module/activedirectory/add-addomaintrust
 
-configuration Create-Domain-Trust {
+configuration CreateDomainTrust {
     param
     (
         [Parameter(Mandatory)]

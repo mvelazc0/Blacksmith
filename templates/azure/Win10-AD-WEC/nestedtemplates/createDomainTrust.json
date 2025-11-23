@@ -95,7 +95,7 @@
           "configuration": {
             "url": "[parameters('createTrustScript')]",
             "script": "Create-Domain-Trust.ps1",
-            "function": "Create-Domain-Trust"
+            "function": "CreateDomainTrust"
           },
           "configurationArguments": {
             "SourceDomainFQDN": "[parameters('sourceDomainFQDN')]",

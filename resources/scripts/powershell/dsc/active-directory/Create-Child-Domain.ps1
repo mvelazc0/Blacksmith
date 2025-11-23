@@ -5,7 +5,7 @@
 # - https://docs.microsoft.com/en-us/powershell/module/addsdeployment/install-addsdomaincontroller
 # - Based on Create-AD.ps1 by Roberto Rodriguez @Cyb3rWard0g
 
-configuration Create-Child-Domain {
+configuration CreateChildDomain {
     param
     (
         [Parameter(Mandatory)]
