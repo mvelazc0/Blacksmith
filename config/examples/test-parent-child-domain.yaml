@@ -1,0 +1,146 @@
+# Test Configuration: Parent-Child Domain
+# Purpose: Validate multi-domain schema and configuration
+
+name: "test-parent-child"
+description: "Test parent-child domain configuration for schema validation"
+location: "eastus"
+resource_group: "rg-test-parent-child"
+
+# Network Configuration
+network:
+  vnet_name: "vnet-test"
+  address_space: "192.168.0.0/16"
+  
+  # Global/shared subnets (optional)
+  subnets:
+    - name: "AzureBastionSubnet"
+      address_prefix: "192.168.0.0/26"
+  
+  remote_access:
+    mode: "AzureBastionHost"
+
+# Credentials
+credentials:
+  admin_username: "labadmin"
+  admin_password: "TestPassword123!"
+
+# Virtual Machines
+virtual_machines:
+  # Corp Domain Controller
+  - name: "DC-CORP"
+    type: "windows_server"
+    role: "domain_controller"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+  
+  # Dev Domain Controller
+  - name: "DC-DEV"
+    type: "windows_server"
+    role: "domain_controller"
+    size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
+  
+  # Corp servers
+  - suffix: "web"
+    count: 1
+    type: "windows_server"
+    size: "Standard_B2ms"
+  
+  # Dev workstations
+  - suffix: "dev"
+    count: 1
+    type: "windows_desktop"
+    size: "Standard_B2ms"
+
+# Multi-Domain Configuration
+domains:
+  # Parent Domain (Forest Root)
+  - name: "corp.local"
+    netbios: "CORP"
+    type: "forest_root"
+    dc_vm: "DC-CORP"
+    dc_ip: "192.168.1.4"
+    
+    # Corp domain subnets
+    subnets:
+      - name: "snet-corp-servers"
+        address_prefix: "192.168.1.0/24"
+        description: "Corp domain servers"
+    
+    # Automatic subnet assignment
+    subnet_assignment:
+      domain_controller: "snet-corp-servers"
+      windows_server: "snet-corp-servers"
+    
+    # Corp domain groups
+    groups:
+      - name: "Corp Admins"
+        scope: "Global"
+        members: ["alice"]
+        local_admin_on:
+          - type: "windows_server"
+    
+    # Corp domain users
+    users:
+      - first_name: "Alice"
+        last_name: "Admin"
+        sam_account: "alice"
+        password: "CorpPass123!"
+        department: "IT"
+        job_title: "Administrator"
+        groups: ["Corp Admins"]
+    
+    # VMs that belong to corp domain
+    endpoints:
+      - "DC-CORP"
+      - "web"
+  
+  # Child Domain
+  - name: "dev.corp.local"
+    netbios: "DEV"
+    type: "child_domain"
+    parent: "corp.local"
+    dc_vm: "DC-DEV"
+    dc_ip: "192.168.2.4"
+    
+    # Dev domain subnets
+    subnets:
+      - name: "snet-dev-workstations"
+        address_prefix: "192.168.2.0/24"
+        description: "Dev domain workstations"
+    
+    # Automatic subnet assignment
+    subnet_assignment:
+      domain_controller: "snet-dev-workstations"
+      windows_desktop: "snet-dev-workstations"
+    
+    # Dev domain groups
+    groups:
+      - name: "Dev Team"
+        scope: "Global"
+        members: ["bob"]
+        local_admin_on:
+          - type: "windows_desktop"
+    
+    # Dev domain users
+    users:
+      - first_name: "Bob"
+        last_name: "Developer"
+        sam_account: "bob"
+        password: "DevPass123!"
+        department: "Development"
+        job_title: "Developer"
+        groups: ["Dev Team"]
+    
+    # VMs that belong to dev domain
+    endpoints:
+      - "DC-DEV"
+      - "dev"
+
+# Tags
+tags:
+  environment: "test"
+  purpose: "schema-validation"
+  project: "blacksmith-multi-domain"

@@ -112,6 +112,13 @@ class ConfigValidator:
         self._validate_services(config)
         self._validate_ip_addresses(config)
         
+        # Multi-domain validation (if domains are defined)
+        if 'domains' in config:
+            self._validate_multi_domain(config)
+            self._validate_domain_subnets(config)
+            self._validate_trusts(config)
+            self._validate_cross_domain_groups(config)
+        
         is_valid = len(self.errors) == 0
         return is_valid, self.errors, self.warnings
     
@@ -381,3 +388,276 @@ class ConfigValidator:
     def get_warnings(self) -> List[str]:
         """Get validation warnings."""
         return self.warnings
+    
+    def _validate_multi_domain(self, config: Dict[str, Any]):
+        """Validate multi-domain configuration."""
+        domains = config.get('domains', [])
+        vms = config.get('virtual_machines', [])
+        vm_identifiers = {vm.get('suffix') or vm.get('name') for vm in vms}
+        
+        # Check for duplicate domain names
+        domain_names = [d['name'] for d in domains]
+        if len(domain_names) != len(set(domain_names)):
+            self.errors.append("Duplicate domain names found")
+        
+        # Validate parent-child relationships
+        for domain in domains:
+            if domain['type'] == 'child_domain':
+                parent = domain.get('parent')
+                if not parent:
+                    self.errors.append(
+                        f"Child domain '{domain['name']}' must specify a parent domain"
+                    )
+                elif parent not in domain_names:
+                    self.errors.append(
+                        f"Child domain '{domain['name']}' references non-existent parent '{parent}'"
+                    )
+                else:
+                    # Check parent is a forest_root
+                    parent_domain = next((d for d in domains if d['name'] == parent), None)
+                    if parent_domain and parent_domain['type'] != 'forest_root':
+                        self.errors.append(
+                            f"Parent domain '{parent}' must be a forest_root, not '{parent_domain['type']}'"
+                        )
+        
+        # Validate DC VMs exist
+        for domain in domains:
+            dc_vm = domain['dc_vm']
+            if dc_vm not in vm_identifiers:
+                self.errors.append(
+                    f"Domain '{domain['name']}' references non-existent DC VM '{dc_vm}'"
+                )
+        
+        # Validate endpoint assignments
+        for domain in domains:
+            endpoints = domain.get('endpoints', [])
+            for endpoint in endpoints:
+                if endpoint not in vm_identifiers:
+                    self.errors.append(
+                        f"Domain '{domain['name']}' endpoint '{endpoint}' not found in VM definitions"
+                    )
+        
+        # Check for circular parent-child relationships
+        if self._has_circular_domain_dependencies(domains):
+            self.errors.append("Circular parent-child relationship detected in domains")
+    
+    def _validate_domain_subnets(self, config: Dict[str, Any]):
+        """Validate domain subnet configurations."""
+        network = config.get('network', {})
+        vnet_range = network.get('address_space', '')
+        domains = config.get('domains', [])
+        
+        # Collect all subnet ranges (global + domain-specific)
+        all_subnets = []
+        global_subnets = network.get('subnets', [])
+        all_subnets.extend(global_subnets)
+        
+        for domain in domains:
+            domain_subnets = domain.get('subnets', [])
+            all_subnets.extend(domain_subnets)
+        
+        # Check for duplicate subnet names
+        subnet_names = [s.get('name') for s in all_subnets]
+        duplicates = [name for name in subnet_names if subnet_names.count(name) > 1]
+        if duplicates:
+            self.errors.append(
+                f"Duplicate subnet names found: {', '.join(set(duplicates))}"
+            )
+        
+        # Check for overlapping subnet ranges
+        for i, subnet1 in enumerate(all_subnets):
+            for subnet2 in all_subnets[i+1:]:
+                if self._subnets_overlap(
+                    subnet1.get('address_prefix', ''),
+                    subnet2.get('address_prefix', '')
+                ):
+                    self.errors.append(
+                        f"Subnets '{subnet1.get('name')}' and '{subnet2.get('name')}' have overlapping address ranges"
+                    )
+        
+        # Validate all subnets are within VNet range
+        for subnet in all_subnets:
+            subnet_range = subnet.get('address_prefix', '')
+            if subnet_range and vnet_range:
+                if not self._is_subnet_in_vnet(subnet_range, vnet_range):
+                    self.errors.append(
+                        f"Subnet '{subnet.get('name')}' range {subnet_range} is not within VNet range {vnet_range}"
+                    )
+        
+        # Validate subnet assignment references
+        for domain in domains:
+            subnet_assignment = domain.get('subnet_assignment', {})
+            domain_subnet_names = [s.get('name') for s in domain.get('subnets', [])]
+            
+            for vm_type, subnet_name in subnet_assignment.items():
+                if subnet_name not in subnet_names:
+                    self.errors.append(
+                        f"Domain '{domain['name']}' subnet assignment references non-existent subnet '{subnet_name}'"
+                    )
+    
+    def _validate_trusts(self, config: Dict[str, Any]):
+        """Validate trust configurations."""
+        trusts = config.get('trusts', [])
+        domains = config.get('domains', [])
+        domain_names = [d['name'] for d in domains]
+        
+        for trust in trusts:
+            source = trust['source']
+            target = trust['target']
+            trust_type = trust['type']
+            
+            # Validate source and target domains exist
+            if source not in domain_names:
+                self.errors.append(
+                    f"Trust source domain '{source}' not found in domain definitions"
+                )
+            if target not in domain_names:
+                self.errors.append(
+                    f"Trust target domain '{target}' not found in domain definitions"
+                )
+            
+            # Validate trust type compatibility
+            if source in domain_names and target in domain_names:
+                source_domain = next((d for d in domains if d['name'] == source), None)
+                target_domain = next((d for d in domains if d['name'] == target), None)
+                
+                if trust_type == 'forest':
+                    # Forest trusts require both to be forest roots
+                    if source_domain['type'] != 'forest_root':
+                        self.errors.append(
+                            f"Forest trust source '{source}' must be a forest_root"
+                        )
+                    if target_domain['type'] != 'forest_root':
+                        self.errors.append(
+                            f"Forest trust target '{target}' must be a forest_root"
+                        )
+                
+                # Check if trust is redundant (parent-child already have implicit trust)
+                if self._is_same_forest(source, target, domains):
+                    self.warnings.append(
+                        f"Trust between '{source}' and '{target}' may be redundant - they are in the same forest"
+                    )
+    
+    def _validate_cross_domain_groups(self, config: Dict[str, Any]):
+        """Validate cross-domain group targeting."""
+        domains = config.get('domains', [])
+        trusts = config.get('trusts', [])
+        
+        # Build trust map
+        trust_map = {}
+        for trust in trusts:
+            source = trust['source']
+            target = trust['target']
+            if source not in trust_map:
+                trust_map[source] = []
+            trust_map[source].append(target)
+            
+            # Bidirectional trusts work both ways
+            if trust['direction'] == 'bidirectional':
+                if target not in trust_map:
+                    trust_map[target] = []
+                trust_map[target].append(source)
+        
+        # Check each group's cross-domain targets
+        for domain in domains:
+            domain_fqdn = domain['name']
+            groups = domain.get('groups', [])
+            
+            for group in groups:
+                local_admin_on = group.get('local_admin_on', [])
+                
+                for target in local_admin_on:
+                    target_domain = target.get('domain')
+                    
+                    # If targeting different domain, check trust exists
+                    if target_domain and target_domain != domain_fqdn:
+                        # Check if domains are in same forest (parent-child)
+                        if self._is_same_forest(domain_fqdn, target_domain, domains):
+                            continue  # Parent-child trust is automatic
+                        
+                        # Check if explicit trust exists
+                        if target_domain not in trust_map.get(domain_fqdn, []):
+                            self.errors.append(
+                                f"Group '{group['name']}' in domain '{domain_fqdn}' "
+                                f"targets domain '{target_domain}' but no trust exists"
+                            )
+                        
+                        # Check group scope for cross-domain
+                        if group.get('scope') not in ['Universal', 'Global']:
+                            self.warnings.append(
+                                f"Group '{group['name']}' targets cross-domain but "
+                                f"scope is '{group.get('scope')}'. Consider 'Universal' scope."
+                            )
+    
+    def _is_same_forest(self, domain1: str, domain2: str, domains: List[Dict]) -> bool:
+        """Check if two domains are in the same forest (parent-child)."""
+        # Find both domains
+        d1 = next((d for d in domains if d['name'] == domain1), None)
+        d2 = next((d for d in domains if d['name'] == domain2), None)
+        
+        if not d1 or not d2:
+            return False
+        
+        # Check if one is parent of other
+        if d1.get('parent') == domain2 or d2.get('parent') == domain1:
+            return True
+        
+        # Check if they share same forest root
+        def get_forest_root(domain):
+            if domain['type'] == 'forest_root':
+                return domain['name']
+            parent = domain.get('parent')
+            if parent:
+                parent_domain = next((d for d in domains if d['name'] == parent), None)
+                if parent_domain:
+                    return get_forest_root(parent_domain)
+            return None
+        
+        return get_forest_root(d1) == get_forest_root(d2)
+    
+    def _has_circular_domain_dependencies(self, domains: List[Dict[str, Any]]) -> bool:
+        """Check for circular parent-child relationships in domains."""
+        # Build parent-child graph
+        graph = {}
+        for domain in domains:
+            domain_name = domain['name']
+            parent = domain.get('parent')
+            graph[domain_name] = [parent] if parent else []
+        
+        # DFS to detect cycles
+        visited = set()
+        rec_stack = set()
+        
+        def has_cycle(node):
+            visited.add(node)
+            rec_stack.add(node)
+            
+            for neighbor in graph.get(node, []):
+                if neighbor:  # Skip None values
+                    if neighbor not in visited:
+                        if has_cycle(neighbor):
+                            return True
+                    elif neighbor in rec_stack:
+                        return True
+            
+            rec_stack.remove(node)
+            return False
+        
+        for domain_name in graph:
+            if domain_name not in visited:
+                if has_cycle(domain_name):
+                    return True
+        
+        return False
+    
+    def _subnets_overlap(self, cidr1: str, cidr2: str) -> bool:
+        """Check if two CIDR ranges overlap."""
+        if not cidr1 or not cidr2:
+            return False
+        try:
+            import ipaddress
+            net1 = ipaddress.ip_network(cidr1, strict=False)
+            net2 = ipaddress.ip_network(cidr2, strict=False)
+            return net1.overlaps(net2)
+        except:
+            return False

@@ -31,6 +31,119 @@ class TemplateBuilder:
         }
         self.base_dir = Path(__file__).parent.parent.parent
     
+    def _get_domain_mode(self) -> str:
+        """
+        Detect the domain configuration mode.
+        
+        Returns:
+            'multi' if using new domains array
+            'single' if using legacy active_directory
+            'none' if no domain configuration
+        """
+        if 'domains' in self.config:
+            return 'multi'
+        elif self.config.get('active_directory', {}).get('enabled'):
+            return 'single'
+        return 'none'
+    
+    def _get_vm_domain(self, vm: Dict[str, Any]) -> str:
+        """
+        Determine which domain a VM belongs to based on endpoint assignments.
+        
+        Args:
+            vm: VM configuration dictionary
+            
+        Returns:
+            Domain FQDN
+        """
+        domains = self.config.get('domains', [])
+        vm_identifier = vm.get('suffix') or vm.get('name')
+        
+        # Check each domain's endpoints
+        for domain in domains:
+            endpoints = domain.get('endpoints', [])
+            if vm_identifier in endpoints:
+                return domain['name']
+        
+        # Default to first domain if not explicitly assigned
+        if domains:
+            return domains[0]['name']
+        
+        # Fallback to legacy single domain
+        ad_config = self.config.get('active_directory', {})
+        if ad_config.get('enabled'):
+            return ad_config.get('domain_fqdn', 'lab.local')
+        
+        raise ValueError(f"Cannot determine domain for VM {vm_identifier}")
+    
+    def _resolve_vm_subnet(self, vm: Dict[str, Any], vm_domain: str = None) -> str:
+        """
+        Resolve which subnet a VM should be placed in.
+        
+        Priority:
+        1. Explicit subnet in VM config
+        2. Domain subnet assignment by role
+        3. Domain subnet assignment by type
+        4. First subnet in domain
+        5. First global subnet
+        
+        Args:
+            vm: VM configuration
+            vm_domain: Domain FQDN this VM belongs to (optional)
+            
+        Returns:
+            Subnet name
+        """
+        # Priority 1: Explicit subnet
+        explicit_subnet = vm.get('network', {}).get('subnet')
+        if explicit_subnet:
+            return explicit_subnet
+        
+        # For multi-domain mode, use domain-based assignment
+        if self._get_domain_mode() == 'multi' and vm_domain:
+            domains = self.config.get('domains', [])
+            domain = next((d for d in domains if d['name'] == vm_domain), None)
+            
+            if domain:
+                vm_type = vm.get('type')
+                vm_role = vm.get('role')
+                
+                # Priority 2: Role-based assignment
+                role_assignments = domain.get('subnet_assignment_by_role', {})
+                if vm_role and vm_role in role_assignments:
+                    return role_assignments[vm_role]
+                
+                # Priority 3: Type-based assignment
+                type_assignments = domain.get('subnet_assignment', {})
+                if vm_type in type_assignments:
+                    return type_assignments[vm_type]
+                
+                # Priority 4: First domain subnet
+                domain_subnets = domain.get('subnets', [])
+                if domain_subnets:
+                    return domain_subnets[0]['name']
+        
+        # Priority 5: First global subnet
+        global_subnets = self.config.get('network', {}).get('subnets', [])
+        if global_subnets:
+            return global_subnets[0]['name']
+        
+        raise ValueError(f"Cannot determine subnet for VM {vm.get('name') or vm.get('suffix')}")
+    
+    def _derive_netbios(self, domain_fqdn: str) -> str:
+        """
+        Derive NetBIOS name from domain FQDN.
+        
+        Args:
+            domain_fqdn: Domain FQDN (e.g., corp.local or dev.corp.local)
+            
+        Returns:
+            NetBIOS name (e.g., CORP or DEV)
+        """
+        # Take first part of FQDN, uppercase, max 15 chars
+        first_part = domain_fqdn.split('.')[0]
+        return first_part.upper()[:15]
+    
     def build(self) -> Dict[str, Any]:
         """
         Build the complete ARM template.
@@ -143,18 +256,28 @@ class TemplateBuilder:
         remote_access = network.get('remote_access', {})
         resources = []
         
-        # Prepare subnets list (including Bastion subnet if needed)
+        # Prepare subnets list (global + domain-specific + Bastion)
         subnets_to_create = list(network.get('subnets', []))
         
-        # Add Azure Bastion subnet if mode is AzureBastionHost
+        # Add domain-specific subnets if in multi-domain mode
+        if self._get_domain_mode() == 'multi':
+            domains = self.config.get('domains', [])
+            for domain in domains:
+                domain_subnets = domain.get('subnets', [])
+                subnets_to_create.extend(domain_subnets)
+        
+        # Add Azure Bastion subnet if mode is AzureBastionHost (check if not already in list)
         if remote_access.get('mode') == 'AzureBastionHost':
             bastion_config = remote_access.get('bastion', {})
             if bastion_config.get('enabled', True):
-                bastion_subnet = {
-                    'name': 'AzureBastionSubnet',
-                    'address_prefix': bastion_config.get('subnet_prefix', '192.168.3.0/26')
-                }
-                subnets_to_create.append(bastion_subnet)
+                # Check if AzureBastionSubnet already exists in the list
+                has_bastion_subnet = any(s.get('name') == 'AzureBastionSubnet' for s in subnets_to_create)
+                if not has_bastion_subnet:
+                    bastion_subnet = {
+                        'name': 'AzureBastionSubnet',
+                        'address_prefix': bastion_config.get('subnet_prefix', '192.168.3.0/26')
+                    }
+                    subnets_to_create.append(bastion_subnet)
         
         # Virtual Network with subnets defined inline (avoids AnotherOperationInProgress errors)
         vnet_resource = {
@@ -341,6 +464,14 @@ class TemplateBuilder:
         vm_network = vm.get('network', {})
         count = vm.get('count', 1)
         
+        # For multi-domain mode, check if this is a DC and get IP from domain config
+        if self._get_domain_mode() == 'multi' and vm.get('role') == 'domain_controller':
+            vm_identifier = vm.get('suffix') or vm.get('name')
+            domains = self.config.get('domains', [])
+            for domain in domains:
+                if domain.get('dc_vm') == vm_identifier:
+                    return domain.get('dc_ip')
+        
         # Check if ip_start is provided - if so, use it for IP calculation
         ip_start = vm_network.get('ip_start')
         if ip_start:
@@ -368,7 +499,13 @@ class TemplateBuilder:
         """Create network interface resource."""
         network = self.config.get('network', {})
         vm_network = vm.get('network', {})
-        subnet_name = vm_network.get('subnet', 'default')
+        
+        # Resolve subnet - use domain-based assignment if in multi-domain mode
+        if self._get_domain_mode() == 'multi':
+            vm_domain = self._get_vm_domain(vm)
+            subnet_name = self._resolve_vm_subnet(vm, vm_domain)
+        else:
+            subnet_name = vm_network.get('subnet', 'default')
         
         # Calculate IP address using helper method
         private_ip = self._calculate_vm_ip(vm, index)
@@ -547,6 +684,17 @@ class TemplateBuilder:
     
     def _add_service_resources(self):
         """Add service-specific resources and extensions using existing ARM templates."""
+        domain_mode = self._get_domain_mode()
+        
+        if domain_mode == 'multi':
+            # Multi-domain mode - use new multi-domain logic
+            self._add_multi_domain_ad_resources()
+        elif domain_mode == 'single':
+            # Single-domain mode - use existing logic
+            self._add_single_domain_ad_resources()
+    
+    def _add_single_domain_ad_resources(self):
+        """Add AD resources for single-domain (legacy) configuration."""
         ad_config = self.config.get('active_directory', {})
         
         if ad_config.get('enabled'):
@@ -572,6 +720,34 @@ class TemplateBuilder:
                 
                 # Step 5: Join servers to domain (via DSC extensions)
                 self._add_server_domain_join_extensions(dc_name, dc_ip, ad_config)
+    
+    def _add_multi_domain_ad_resources(self):
+        """Add AD resources for multi-domain configuration."""
+        domains = self.config.get('domains', [])
+        
+        if not domains:
+            return
+        
+        # Phase 1: Create all forest root DCs
+        forest_roots = [d for d in domains if d['type'] == 'forest_root']
+        for domain in forest_roots:
+            self._create_forest_root_domain(domain)
+        
+        # Phase 2: Update VNet DNS to include all DC IPs
+        self._update_vnet_dns_multi_domain()
+        
+        # Phase 3: Create child domain DCs (depends on parent DCs)
+        child_domains = [d for d in domains if d['type'] == 'child_domain']
+        for domain in child_domains:
+            self._create_child_domain(domain)
+        
+        # Phase 4: Configure trust relationships
+        trusts = self.config.get('trusts', [])
+        if trusts:
+            self._configure_domain_trusts(trusts)
+        
+        # Phase 5: Join endpoints to their respective domains
+        self._join_endpoints_to_domains()
     
     def _add_outputs(self):
         """Add outputs to the template."""
@@ -1710,3 +1886,688 @@ class TemplateBuilder:
         """
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(self.template, f, indent=2)
+    
+    def _create_forest_root_domain(self, domain: Dict[str, Any]):
+        """
+        Create a forest root domain controller.
+        
+        Args:
+            domain: Domain configuration dictionary
+        """
+        domain_fqdn = domain['name']
+        domain_netbios = domain.get('netbios', self._derive_netbios(domain_fqdn))
+        dc_vm_identifier = domain['dc_vm']
+        dc_ip = domain['dc_ip']
+        
+        # Find the DC VM configuration
+        vms = self.config.get('virtual_machines', [])
+        dc_vm = next((vm for vm in vms if (vm.get('suffix') or vm.get('name')) == dc_vm_identifier), None)
+        
+        if not dc_vm:
+            return
+        
+        # Get the actual DC name (might be generated from suffix)
+        dc_name = self._generate_vm_name(dc_vm, 0) if dc_vm.get('suffix') else dc_vm.get('name')
+        
+        # Step 1: Add prep script to install DSC modules on DC
+        self._add_dc_prep_extension(dc_name)
+        
+        # Step 2: Create AD forest using nested deployment
+        # Prepare domain users array
+        users = domain.get('users', [])
+        domain_users_array = []
+        for user in users:
+            domain_users_array.append({
+                "FirstName": user.get('first_name', ''),
+                "LastName": user.get('last_name', ''),
+                "SamAccountName": user.get('sam_account', ''),
+                "Department": user.get('department', ''),
+                "JobTitle": user.get('job_title', ''),
+                "Password": user.get('password', ''),
+                "Identity": user.get('groups', ['Users'])[0] if user.get('groups') else 'Users',
+                "UserContainer": "DomainUsers"
+            })
+        
+        # Prepare domain groups array
+        groups = domain.get('groups', [])
+        domain_groups_array = []
+        for group in groups:
+            domain_groups_array.append({
+                "Name": group.get('name'),
+                "Description": group.get('description', ''),
+                "Scope": group.get('scope', 'Global'),
+                "Members": group.get('members', [])
+            })
+        
+        # Create AD forest deployment
+        deployment = {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": f"CreateADForest-{domain_netbios}",
+            "dependsOn": [
+                f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{dc_name}', 'SetUpDC')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/nestedtemplates/createADForest.json",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vmName": {
+                        "value": dc_name
+                    },
+                    "createADForestScript": {
+                        "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Create-AD.zip"
+                    },
+                    "domainFQDN": {
+                        "value": domain_fqdn
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "adminPassword": {
+                        "value": "[parameters('adminPassword')]"
+                    },
+                    "domainUsers": {
+                        "value": {"array": domain_users_array}
+                    },
+                    "domainGroups": {
+                        "value": {"array": domain_groups_array}
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    }
+                }
+            }
+        }
+        
+        self.template["resources"].append(deployment)
+    
+    def _create_child_domain(self, domain: Dict[str, Any]):
+        """
+        Create a child domain controller.
+        
+        Args:
+            domain: Domain configuration dictionary
+        """
+        domain_fqdn = domain['name']
+        domain_netbios = domain.get('netbios', self._derive_netbios(domain_fqdn))
+        parent_fqdn = domain['parent']
+        dc_vm_identifier = domain['dc_vm']
+        
+        # Find parent domain to get parent DC IP
+        domains = self.config.get('domains', [])
+        parent_domain = next((d for d in domains if d['name'] == parent_fqdn), None)
+        if not parent_domain:
+            return
+        
+        parent_dc_ip = parent_domain['dc_ip']
+        parent_netbios = parent_domain.get('netbios', self._derive_netbios(parent_fqdn))
+        
+        # Find the DC VM configuration
+        vms = self.config.get('virtual_machines', [])
+        dc_vm = next((vm for vm in vms if (vm.get('suffix') or vm.get('name')) == dc_vm_identifier), None)
+        
+        if not dc_vm:
+            return
+        
+        # Get the actual DC name
+        dc_name = self._generate_vm_name(dc_vm, 0) if dc_vm.get('suffix') else dc_vm.get('name')
+        
+        # Extract child domain name (first part of FQDN)
+        child_name = domain_fqdn.split('.')[0]
+        
+        # Step 1: Add prep script
+        self._add_dc_prep_extension(dc_name)
+        
+        # Step 2: Create child domain using new DSC script
+        # Prepare domain users array
+        users = domain.get('users', [])
+        domain_users_array = []
+        for user in users:
+            domain_users_array.append({
+                "FirstName": user.get('first_name', ''),
+                "LastName": user.get('last_name', ''),
+                "SamAccountName": user.get('sam_account', ''),
+                "Department": user.get('department', ''),
+                "JobTitle": user.get('job_title', ''),
+                "Password": user.get('password', ''),
+                "Identity": user.get('groups', ['Users'])[0] if user.get('groups') else 'Users',
+                "UserContainer": "DomainUsers"
+            })
+        
+        # Prepare domain groups array
+        groups = domain.get('groups', [])
+        domain_groups_array = []
+        for group in groups:
+            domain_groups_array.append({
+                "Name": group.get('name'),
+                "Description": group.get('description', ''),
+                "Scope": group.get('scope', 'Global'),
+                "Members": group.get('members', [])
+            })
+        
+        # Create child domain deployment
+        deployment = {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": f"CreateChildDomain-{domain_netbios}",
+            "dependsOn": [
+                f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{dc_name}', 'SetUpDC')]",
+                f"[resourceId('Microsoft.Resources/deployments', 'CreateADForest-{parent_netbios}')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/nestedtemplates/createChildDomain.json",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vmName": {
+                        "value": dc_name
+                    },
+                    "createChildDomainScript": {
+                        "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Create-Child-Domain.zip"
+                    },
+                    "childDomainName": {
+                        "value": child_name
+                    },
+                    "parentDomainFQDN": {
+                        "value": parent_fqdn
+                    },
+                    "parentDCIPAddress": {
+                        "value": parent_dc_ip
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "adminPassword": {
+                        "value": "[parameters('adminPassword')]"
+                    },
+                    "domainUsers": {
+                        "value": {"array": domain_users_array}
+                    },
+                    "domainGroups": {
+                        "value": {"array": domain_groups_array}
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    }
+                }
+            }
+        }
+        
+        self.template["resources"].append(deployment)
+    
+    def _update_vnet_dns_multi_domain(self):
+        """Update VNet DNS to include all DC IPs for multi-domain resolution."""
+        network = self.config.get('network', {})
+        domains = self.config.get('domains', [])
+        remote_access = network.get('remote_access', {})
+        
+        # Collect all DC IPs
+        dc_ips = [domain['dc_ip'] for domain in domains]
+        
+        # Collect all subnets (global + domain-specific)
+        all_subnets = []
+        global_subnets = network.get('subnets', [])
+        for subnet in global_subnets:
+            all_subnets.append({
+                "name": subnet.get('name'),
+                "properties": {
+                    "addressPrefix": subnet.get('address_prefix')
+                }
+            })
+        
+        # Add domain-specific subnets
+        for domain in domains:
+            domain_subnets = domain.get('subnets', [])
+            for subnet in domain_subnets:
+                all_subnets.append({
+                    "name": subnet.get('name'),
+                    "properties": {
+                        "addressPrefix": subnet.get('address_prefix')
+                    }
+                })
+        
+        # Add Bastion subnet if needed
+        if remote_access.get('mode') == 'AzureBastionHost':
+            bastion_config = remote_access.get('bastion', {})
+            if bastion_config.get('enabled', True):
+                # Check if not already in list
+                has_bastion = any(s['name'] == 'AzureBastionSubnet' for s in all_subnets)
+                if not has_bastion:
+                    all_subnets.append({
+                        "name": "AzureBastionSubnet",
+                        "properties": {
+                            "addressPrefix": bastion_config.get('subnet_prefix', '192.168.3.0/26')
+                        }
+                    })
+        
+        # Get the first forest root to depend on
+        forest_roots = [d for d in domains if d['type'] == 'forest_root']
+        if not forest_roots:
+            return
+        
+        first_forest = forest_roots[0]
+        first_netbios = first_forest.get('netbios', self._derive_netbios(first_forest['name']))
+        
+        # Nested deployment to update VNet DNS
+        deployment = {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "UpdateVNetDNS",
+            "dependsOn": [
+                f"[resourceId('Microsoft.Resources/deployments', 'CreateADForest-{first_netbios}')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD/nestedtemplates/vnet-dns-server.json",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "virtualNetworkName": {
+                        "value": "[variables('virtualNetworkName')]"
+                    },
+                    "virtualNetworkAddressRange": {
+                        "value": "[variables('virtualNetworkAddressRange')]"
+                    },
+                    "subnets": {
+                        "value": all_subnets
+                    },
+                    "DNSServerAddress": {
+                        "value": dc_ips
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    }
+                }
+            }
+        }
+        
+        self.template["resources"].append(deployment)
+    
+    def _configure_domain_trusts(self, trusts: List[Dict[str, Any]]):
+        """
+        Configure trust relationships between domains.
+        
+        Args:
+            trusts: List of trust configurations
+        """
+        domains = self.config.get('domains', [])
+        
+        for trust in trusts:
+            source_fqdn = trust['source']
+            target_fqdn = trust['target']
+            trust_type = trust['type']
+            trust_direction = trust['direction']
+            trust_password = trust['trust_password']
+            selective_auth = trust.get('selective_auth', False)
+            
+            # Find source and target domains
+            source_domain = next((d for d in domains if d['name'] == source_fqdn), None)
+            target_domain = next((d for d in domains if d['name'] == target_fqdn), None)
+            
+            if not source_domain or not target_domain:
+                continue
+            
+            # Get source DC info
+            source_dc_vm_id = source_domain['dc_vm']
+            source_netbios = source_domain.get('netbios', self._derive_netbios(source_fqdn))
+            target_dc_ip = target_domain['dc_ip']
+            target_netbios = target_domain.get('netbios', self._derive_netbios(target_fqdn))
+            
+            # Find source DC VM
+            vms = self.config.get('virtual_machines', [])
+            source_dc_vm = next((vm for vm in vms if (vm.get('suffix') or vm.get('name')) == source_dc_vm_id), None)
+            
+            if not source_dc_vm:
+                continue
+            
+            source_dc_name = self._generate_vm_name(source_dc_vm, 0) if source_dc_vm.get('suffix') else source_dc_vm.get('name')
+            
+            # Determine dependencies - trust must wait for both domains to be created
+            trust_dependencies = [
+                f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{source_dc_name}', 'SetUpDC')]",
+                "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
+            ]
+            
+            # Add dependency on source domain creation
+            if source_domain['type'] == 'forest_root':
+                trust_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateADForest-{source_netbios}')]")
+            else:
+                trust_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateChildDomain-{source_netbios}')]")
+            
+            # Add dependency on target domain creation
+            if target_domain['type'] == 'forest_root':
+                trust_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateADForest-{target_netbios}')]")
+            else:
+                trust_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateChildDomain-{target_netbios}')]")
+            
+            # Create trust deployment
+            deployment = {
+                "type": "Microsoft.Resources/deployments",
+                "apiVersion": "2021-04-01",
+                "name": f"CreateTrust-{source_netbios}-to-{target_netbios}",
+                "dependsOn": trust_dependencies,
+                "properties": {
+                    "mode": "Incremental",
+                    "templateLink": {
+                        "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/nestedtemplates/createDomainTrust.json",
+                        "contentVersion": "1.0.0.0"
+                    },
+                    "parameters": {
+                        "vmName": {
+                            "value": source_dc_name
+                        },
+                        "createTrustScript": {
+                            "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Create-Domain-Trust.zip"
+                        },
+                        "sourceDomainFQDN": {
+                            "value": source_fqdn
+                        },
+                        "targetDomainFQDN": {
+                            "value": target_fqdn
+                        },
+                        "targetDCIPAddress": {
+                            "value": target_dc_ip
+                        },
+                        "trustType": {
+                            "value": trust_type.capitalize()
+                        },
+                        "trustDirection": {
+                            "value": trust_direction.capitalize()
+                        },
+                        "trustPassword": {
+                            "value": trust_password
+                        },
+                        "selectiveAuth": {
+                            "value": selective_auth
+                        },
+                        "adminUsername": {
+                            "value": "[parameters('adminUsername')]"
+                        },
+                        "adminPassword": {
+                            "value": "[parameters('adminPassword')]"
+                        },
+                        "location": {
+                            "value": "[parameters('location')]"
+                        }
+                    }
+                }
+            }
+            
+            self.template["resources"].append(deployment)
+    
+    def _join_endpoints_to_domains(self):
+        """Join VMs to their assigned domains."""
+        domains = self.config.get('domains', [])
+        vms = self.config.get('virtual_machines', [])
+        
+        # For each domain, join its endpoints
+        for domain in domains:
+            domain_fqdn = domain['name']
+            domain_netbios = domain.get('netbios', self._derive_netbios(domain_fqdn))
+            dc_ip = domain['dc_ip']
+            endpoints = domain.get('endpoints', [])
+            
+            # Build OU path
+            domain_parts = domain_fqdn.split('.')
+            
+            # Find VMs that belong to this domain
+            domain_vms = []
+            for vm in vms:
+                vm_identifier = vm.get('suffix') or vm.get('name')
+                if vm_identifier in endpoints and vm.get('role') != 'domain_controller':
+                    domain_vms.append(vm)
+            
+            if not domain_vms:
+                continue
+            
+            # Separate workstations and servers
+            workstation_vms = [vm for vm in domain_vms if vm.get('type') == 'windows_desktop']
+            server_vms = [vm for vm in domain_vms if vm.get('type') != 'windows_desktop']
+            
+            # Join workstations via nested deployment
+            if workstation_vms:
+                self._add_domain_join_deployment_for_domain(
+                    domain_fqdn, domain_netbios, dc_ip, workstation_vms, "Workstations"
+                )
+            
+            # Join servers via DSC extensions
+            if server_vms:
+                self._add_server_domain_join_extensions_for_domain(
+                    domain_fqdn, domain_netbios, dc_ip, server_vms
+                )
+    
+    def _add_domain_join_deployment_for_domain(
+        self, 
+        domain_fqdn: str, 
+        domain_netbios: str, 
+        dc_ip: str, 
+        workstation_vms: List[Dict[str, Any]],
+        ou_name: str
+    ):
+        """Add nested deployment to join workstations to a specific domain."""
+        # Build OU path
+        domain_parts = domain_fqdn.split('.')
+        ou_path = f"OU={ou_name};DC={';DC='.join(domain_parts)}"
+        
+        # Get local admin groups for workstations (use first workstation as representative)
+        workstation_vm = workstation_vms[0]
+        local_admin_groups = self._get_local_admin_groups_for_vm_multi_domain(
+            workstation_vm, domain_fqdn
+        )
+        
+        # Nested deployment
+        deployment = {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": f"JoinWorkstations-{domain_netbios}",
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]",
+                "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD/nestedtemplates/joinDomain.json",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "virtualMachines": {
+                        "value": "[reference('deployWorkstations').outputs.allWinVMsDeployed.value]"
+                    },
+                    "joinDomainScript": {
+                        "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip"
+                    },
+                    "domainFQDN": {
+                        "value": domain_fqdn
+                    },
+                    "domainNetbiosName": {
+                        "value": domain_netbios
+                    },
+                    "adminUsername": {
+                        "value": "[parameters('adminUsername')]"
+                    },
+                    "adminPassword": {
+                        "value": "[parameters('adminPassword')]"
+                    },
+                    "dcIpAddress": {
+                        "value": dc_ip
+                    },
+                    "joinOU": {
+                        "value": ou_path
+                    },
+                    "localAdminGroups": {
+                        "value": local_admin_groups
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    }
+                }
+            }
+        }
+        
+        self.template["resources"].append(deployment)
+    
+    def _add_server_domain_join_extensions_for_domain(
+        self,
+        domain_fqdn: str,
+        domain_netbios: str,
+        dc_ip: str,
+        server_vms: List[Dict[str, Any]]
+    ):
+        """Add domain join extensions for servers in a specific domain."""
+        # Build OU path for servers
+        domain_parts = domain_fqdn.split('.')
+        ou_path = f"OU=Servers;DC={';DC='.join(domain_parts)}"
+        
+        for vm in server_vms:
+            count = vm.get('count', 1)
+            
+            # Handle multiple instances
+            for i in range(count):
+                instance_name = self._generate_vm_name(vm, i)
+                
+                # Determine which groups should be local admins on THIS SPECIFIC VM instance
+                local_admin_groups = self._get_local_admin_groups_for_vm_multi_domain(
+                    vm, domain_fqdn, instance_name
+                )
+                
+                # Step 1: Add prep extension to install DSC modules
+                prep_extension = {
+                    "type": "Microsoft.Compute/virtualMachines/extensions",
+                    "apiVersion": "2021-11-01",
+                    "name": f"{instance_name}/SetUpServer",
+                    "location": "[parameters('location')]",
+                    "dependsOn": [
+                        f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]"
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.Compute",
+                        "type": "CustomScriptExtension",
+                        "typeHandlerVersion": "1.8",
+                        "autoUpgradeMinorVersion": True,
+                        "settings": {
+                            "fileUris": [
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
+                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1"
+                            ],
+                            "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Install-DSC-Modules.ps1"
+                        },
+                        "protectedSettings": {}
+                    }
+                }
+                self.template["resources"].append(prep_extension)
+                
+                # Step 2: DSC extension for domain join
+                join_extension = {
+                    "type": "Microsoft.Compute/virtualMachines/extensions",
+                    "apiVersion": "2021-11-01",
+                    "name": f"{instance_name}/JoinDomain",
+                    "location": "[parameters('location')]",
+                    "dependsOn": [
+                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', 'SetUpServer')]",
+                        "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.Powershell",
+                        "type": "DSC",
+                        "typeHandlerVersion": "2.77",
+                        "autoUpgradeMinorVersion": True,
+                        "settings": {
+                            "wmfVersion": "latest",
+                            "configuration": {
+                                "url": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip",
+                                "script": "Join-Domain.ps1",
+                                "function": "Join-Domain"
+                            },
+                            "configurationArguments": {
+                                "DomainFQDN": domain_fqdn,
+                                "DomainNetbiosName": domain_netbios,
+                                "DCIPAddress": dc_ip,
+                                "JoinOU": ou_path,
+                                "LocalAdminGroups": local_admin_groups
+                            }
+                        },
+                        "protectedSettings": {
+                            "configurationArguments": {
+                                "AdminCreds": {
+                                    "UserName": "[parameters('adminUsername')]",
+                                    "Password": "[parameters('adminPassword')]"
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                self.template["resources"].append(join_extension)
+    
+    def _get_local_admin_groups_for_vm_multi_domain(
+        self, 
+        vm: Dict[str, Any], 
+        vm_domain: str,
+        instance_name: str = None
+    ) -> List[str]:
+        """
+        Determine which AD groups should be local administrators on this VM (multi-domain version).
+        
+        Args:
+            vm: VM configuration dictionary
+            vm_domain: Domain FQDN this VM belongs to
+            instance_name: Actual VM instance name
+            
+        Returns:
+            List of AD group names (for now, simple strings - Phase 4 will add domain prefix)
+        """
+        domains = self.config.get('domains', [])
+        local_admin_groups = []
+        
+        vm_type = vm.get('type')
+        vm_role = vm.get('role')
+        vm_suffix = vm.get('suffix')
+        vm_name = vm.get('name')
+        actual_vm_name = instance_name if instance_name else vm_name
+        
+        # Check groups in ALL domains
+        for domain in domains:
+            domain_fqdn = domain['name']
+            groups = domain.get('groups', [])
+            
+            for group in groups:
+                group_name = group.get('name')
+                local_admin_on = group.get('local_admin_on', [])
+                
+                # Check each target
+                for target in local_admin_on:
+                    # Determine target domain (default to group's domain)
+                    target_domain = target.get('domain', domain_fqdn)
+                    
+                    # Skip if target domain doesn't match VM's domain
+                    if target_domain != vm_domain:
+                        continue
+                    
+                    # Check if VM matches target criteria
+                    should_add = False
+                    if target.get('type') and target.get('type') == vm_type:
+                        should_add = True
+                    elif target.get('role') and target.get('role') == vm_role:
+                        should_add = True
+                    elif target.get('suffix') and target.get('suffix') == vm_suffix:
+                        should_add = True
+                    elif target.get('name') and target.get('name') == actual_vm_name:
+                        should_add = True
+                    
+                    if should_add:
+                        # For now, just add group name (Phase 4 will add domain prefix)
+                        local_admin_groups.append(group_name)
+                        break  # Don't add same group multiple times
+        
+        return local_admin_groups

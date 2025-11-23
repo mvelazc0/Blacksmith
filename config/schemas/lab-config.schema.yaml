@@ -73,7 +73,6 @@ properties:
     required:
       - vnet_name
       - address_space
-      - subnets
     properties:
       vnet_name:
         type: string
@@ -254,11 +253,10 @@ properties:
 
         network:
           type: object
-          required:
-            - subnet
           properties:
             subnet:
               type: string
+              description: "Subnet name (optional - can be auto-assigned based on domain)"
             private_ip:
               type: string
               pattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}$"
@@ -548,6 +546,252 @@ properties:
                   items:
                     type: string
                   description: "VM names to apply DCR to (empty means all VMs)"
+
+  # Multi-Domain Configuration (new)
+  domains:
+    type: array
+    description: "Multi-domain/multi-forest configuration (alternative to active_directory)"
+    minItems: 1
+    items:
+      type: object
+      required:
+        - name
+        - type
+        - dc_vm
+        - dc_ip
+      properties:
+        name:
+          type: string
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9.-]*\\.[a-zA-Z]{2,}$"
+          description: "Domain FQDN (e.g., corp.local or dev.corp.local)"
+        
+        netbios:
+          type: string
+          pattern: "^[a-zA-Z0-9]+$"
+          maxLength: 15
+          description: "NetBIOS name (optional, auto-derived from FQDN if not provided)"
+        
+        type:
+          type: string
+          enum: [forest_root, child_domain]
+          description: "Domain type: forest_root for new forest, child_domain for child domain"
+        
+        parent:
+          type: string
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9.-]*\\.[a-zA-Z]{2,}$"
+          description: "Parent domain FQDN (required for child_domain type)"
+        
+        dc_vm:
+          type: string
+          description: "VM name or suffix for the domain controller"
+        
+        dc_ip:
+          type: string
+          pattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}$"
+          description: "Static IP address for the domain controller"
+        
+        functional_level:
+          type: string
+          enum: [WinThreshold, Win2016, Win2019]
+          default: "WinThreshold"
+          description: "Domain functional level"
+        
+        # Domain-specific subnets
+        subnets:
+          type: array
+          description: "Subnets specific to this domain"
+          items:
+            type: object
+            required:
+              - name
+              - address_prefix
+            properties:
+              name:
+                type: string
+                pattern: "^[a-zA-Z0-9-_]+$"
+              address_prefix:
+                type: string
+                pattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+              description:
+                type: string
+              nsg:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  rules:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - name
+                        - priority
+                        - direction
+                        - access
+                        - protocol
+                        - destination_port
+                      properties:
+                        name:
+                          type: string
+                        priority:
+                          type: integer
+                          minimum: 100
+                          maximum: 4096
+                        direction:
+                          enum: [Inbound, Outbound]
+                        access:
+                          enum: [Allow, Deny]
+                        protocol:
+                          enum: [Tcp, Udp, "*"]
+                        source_port:
+                          type: string
+                        destination_port:
+                          type: string
+                        source_address:
+                          type: string
+        
+        # Subnet assignment rules
+        subnet_assignment:
+          type: object
+          description: "Automatic subnet assignment based on VM type"
+          properties:
+            domain_controller:
+              type: string
+            windows_server:
+              type: string
+            windows_desktop:
+              type: string
+            linux:
+              type: string
+        
+        subnet_assignment_by_role:
+          type: object
+          description: "Subnet assignment based on VM role (overrides type-based)"
+          additionalProperties:
+            type: string
+        
+        # Domain groups
+        groups:
+          type: array
+          items:
+            type: object
+            required:
+              - name
+            properties:
+              name:
+                type: string
+                pattern: "^[a-zA-Z0-9 ]+$"
+                maxLength: 64
+              description:
+                type: string
+                maxLength: 256
+              scope:
+                type: string
+                enum: [DomainLocal, Global, Universal]
+                default: Global
+              members:
+                type: array
+                items:
+                  type: string
+              local_admin_on:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    domain:
+                      type: string
+                      description: "Target domain FQDN (defaults to group's domain)"
+                    type:
+                      type: string
+                      enum: [windows_server, windows_desktop, linux]
+                    role:
+                      type: string
+                      enum: [domain_controller, adfs, wec, exchange, generic]
+                    suffix:
+                      type: string
+                    name:
+                      type: string
+        
+        # Domain users
+        users:
+          type: array
+          items:
+            type: object
+            required:
+              - first_name
+              - last_name
+              - sam_account
+              - password
+            properties:
+              first_name:
+                type: string
+              last_name:
+                type: string
+              sam_account:
+                type: string
+                pattern: "^[a-zA-Z0-9]+$"
+                maxLength: 20
+              password:
+                type: string
+                minLength: 8
+              department:
+                type: string
+              job_title:
+                type: string
+              groups:
+                type: array
+                items:
+                  type: string
+        
+        # Endpoint assignments
+        endpoints:
+          type: array
+          description: "VM names/suffixes that belong to this domain"
+          items:
+            type: string
+  
+  # Trust relationships
+  trusts:
+    type: array
+    description: "Trust relationships between domains/forests"
+    items:
+      type: object
+      required:
+        - source
+        - target
+        - type
+        - direction
+        - trust_password
+      properties:
+        source:
+          type: string
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9.-]*\\.[a-zA-Z]{2,}$"
+          description: "Source domain FQDN"
+        
+        target:
+          type: string
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9.-]*\\.[a-zA-Z]{2,}$"
+          description: "Target domain FQDN"
+        
+        type:
+          type: string
+          enum: [forest, external, shortcut]
+          description: "Trust type: forest (between forest roots), external (between domains), shortcut (within forest)"
+        
+        direction:
+          type: string
+          enum: [bidirectional, oneway-outbound, oneway-inbound]
+          description: "Trust direction"
+        
+        trust_password:
+          type: string
+          minLength: 12
+          description: "Password for the trust relationship"
+        
+        selective_auth:
+          type: boolean
+          default: false
+          description: "Enable selective authentication"
 
   tags:
     type: object

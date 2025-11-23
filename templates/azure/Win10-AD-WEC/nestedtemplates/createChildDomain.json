@@ -1,0 +1,105 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vmName": {
+      "type": "string",
+      "metadata": {
+        "description": "VM name for the child domain controller"
+      }
+    },
+    "createChildDomainScript": {
+      "type": "string",
+      "metadata": {
+        "description": "URL to Create-Child-Domain.zip DSC script"
+      }
+    },
+    "childDomainName": {
+      "type": "string",
+      "metadata": {
+        "description": "Child domain name (e.g., 'dev' for dev.corp.local)"
+      }
+    },
+    "parentDomainFQDN": {
+      "type": "string",
+      "metadata": {
+        "description": "Parent domain FQDN (e.g., corp.local)"
+      }
+    },
+    "parentDCIPAddress": {
+      "type": "string",
+      "metadata": {
+        "description": "Parent domain controller IP address"
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin username"
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Admin password"
+      }
+    },
+    "domainUsers": {
+      "type": "object",
+      "metadata": {
+        "description": "Domain users to create"
+      }
+    },
+    "domainGroups": {
+      "type": "object",
+      "metadata": {
+        "description": "Domain groups to create"
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Location for resources"
+      }
+    }
+  },
+  "variables": {},
+  "resources": [
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(parameters('vmName'),'/CreateChildDomain')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "publisher": "Microsoft.Powershell",
+        "type": "DSC",
+        "typeHandlerVersion": "2.77",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "wmfVersion": "latest",
+          "configuration": {
+            "url": "[parameters('createChildDomainScript')]",
+            "script": "Create-Child-Domain.ps1",
+            "function": "Create-Child-Domain"
+          },
+          "configurationArguments": {
+            "ChildDomainName": "[parameters('childDomainName')]",
+            "ParentDomainFQDN": "[parameters('parentDomainFQDN')]",
+            "ParentDCIPAddress": "[parameters('parentDCIPAddress')]",
+            "DomainUsers": "[parameters('domainUsers')]",
+            "DomainGroups": "[parameters('domainGroups')]"
+          }
+        },
+        "protectedSettings": {
+          "configurationArguments": {
+            "AdminCreds": {
+              "UserName": "[parameters('adminUsername')]",
+              "Password": "[parameters('adminPassword')]"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {}
+}

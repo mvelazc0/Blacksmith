@@ -212,3 +212,65 @@ class ConfigLoader:
             Complete configuration dictionary
         """
         return self.config.copy()
+    
+    def get_domain_mode(self) -> str:
+        """
+        Detect the domain configuration mode.
+        
+        Returns:
+            'multi' if using new domains array
+            'single' if using legacy active_directory
+            'none' if no domain configuration
+        """
+        if 'domains' in self.config:
+            return 'multi'
+        elif self.config.get('active_directory', {}).get('enabled'):
+            return 'single'
+        return 'none'
+    
+    def is_multi_domain(self) -> bool:
+        """
+        Check if configuration uses multi-domain mode.
+        
+        Returns:
+            True if using domains array, False otherwise
+        """
+        return 'domains' in self.config
+    
+    def get_domains_config(self) -> list:
+        """
+        Get domains configuration section.
+        
+        Returns:
+            List of domain configurations (empty if not using multi-domain)
+        """
+        return self.config.get('domains', [])
+    
+    def get_trusts_config(self) -> list:
+        """
+        Get trusts configuration section.
+        
+        Returns:
+            List of trust configurations (empty if not defined)
+        """
+        return self.config.get('trusts', [])
+    
+    def get_all_subnets(self) -> list:
+        """
+        Get all subnets (global + domain-specific).
+        
+        Returns:
+            List of all subnet configurations
+        """
+        subnets = []
+        
+        # Add global subnets
+        network = self.get_network_config()
+        subnets.extend(network.get('subnets', []))
+        
+        # Add domain-specific subnets
+        if self.is_multi_domain():
+            for domain in self.get_domains_config():
+                subnets.extend(domain.get('subnets', []))
+        
+        return subnets
