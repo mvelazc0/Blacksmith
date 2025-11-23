@@ -547,7 +547,6 @@ properties:
                     type: string
                   description: "VM names to apply DCR to (empty means all VMs)"
 
-<<<<<<< HEAD
   # Multi-Domain Configuration (new)
   domains:
     type: array
@@ -793,7 +792,7 @@ properties:
           type: boolean
           default: false
           description: "Enable selective authentication"
-=======
+  
   attack_vm:
     type: object
     description: "Optional attack VM for red team exercises"
@@ -887,8 +886,7 @@ properties:
           type: string
           format: uri
           description: "URL to custom script"
->>>>>>> 918391b5b1273677b5a06413c2e1eed7915747f5
-
+  
   tags:
     type: object
     additionalProperties:

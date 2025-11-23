@@ -1227,7 +1227,13 @@ class TemplateBuilder:
         
         # Get IP configuration
         vm_network = workstation.get('network', {})
-        subnet_name = vm_network.get('subnet', 'default')
+        
+        # Resolve subnet - use domain-aware resolution in multi-domain mode
+        if self._get_domain_mode() == 'multi':
+            vm_domain = self._get_vm_domain(workstation)
+            subnet_name = self._resolve_vm_subnet(workstation, vm_domain)
+        else:
+            subnet_name = vm_network.get('subnet', 'default')
         
         # Calculate starting IP for the first workstation
         private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
@@ -1256,12 +1262,35 @@ class TemplateBuilder:
                 vm_name_suffix = ip_suffix  # Use IP suffix
         
         # Find the subnet configuration to get address prefix
-        subnets = network.get('subnets', [])
+        # In multi-domain mode, check both global and domain-specific subnets
         subnet_range = '192.168.1.0/24'  # default
-        for subnet in subnets:
-            if subnet.get('name') == subnet_name:
-                subnet_range = subnet.get('address_prefix', '192.168.1.0/24')
-                break
+        
+        if self._get_domain_mode() == 'multi':
+            # Check global subnets
+            global_subnets = network.get('subnets', [])
+            for subnet in global_subnets:
+                if subnet.get('name') == subnet_name:
+                    subnet_range = subnet.get('address_prefix', '192.168.1.0/24')
+                    break
+            
+            # Check domain-specific subnets
+            if subnet_range == '192.168.1.0/24':  # Not found in global
+                domains = self.config.get('domains', [])
+                for domain in domains:
+                    domain_subnets = domain.get('subnets', [])
+                    for subnet in domain_subnets:
+                        if subnet.get('name') == subnet_name:
+                            subnet_range = subnet.get('address_prefix', '192.168.1.0/24')
+                            break
+                    if subnet_range != '192.168.1.0/24':
+                        break
+        else:
+            # Single-domain mode - check network subnets
+            subnets = network.get('subnets', [])
+            for subnet in subnets:
+                if subnet.get('name') == subnet_name:
+                    subnet_range = subnet.get('address_prefix', '192.168.1.0/24')
+                    break
         
         # Get OS configuration
         os_config = workstation.get('os', {})
