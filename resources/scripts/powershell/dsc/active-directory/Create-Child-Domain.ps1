@@ -127,12 +127,14 @@ configuration CreateChildDomain {
         }
          
         # ***** Create Child Domain *****
+        # Note: Using ParentDomainCreds (Enterprise Admin from parent) for child domain creation
         ADDomain CreateChildDomain
         {
             DomainName                      = $ChildDomainName
             DomainNetBiosName               = $DomainNetbiosName
             ParentDomainName                = $ParentDomainFQDN
-            Credential                      = $ParentDomainCreds
+            Credential                      = $AdminCreds
+            DnsDelegationCredential         = $ParentDomainCreds
             SafemodeAdministratorPassword   = $AdminCreds
             DatabasePath                    = "C:\NTDS"
             LogPath                         = "C:\NTDS"
