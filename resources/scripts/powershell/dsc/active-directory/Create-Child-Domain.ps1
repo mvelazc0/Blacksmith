@@ -130,6 +130,7 @@ configuration CreateChildDomain {
         ADDomain CreateChildDomain
         {
             DomainName                      = $ChildDomainName
+            DomainNetBiosName               = $DomainNetbiosName
             ParentDomainName                = $ParentDomainFQDN
             Credential                      = $ParentDomainCreds
             SafemodeAdministratorPassword   = $AdminCreds
