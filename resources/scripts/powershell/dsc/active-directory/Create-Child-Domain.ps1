@@ -155,16 +155,8 @@ configuration CreateChildDomain {
             DependsOn               = "[PendingReboot]RebootOnSignalFromCreateChildDomain"
         }
 
-        # ***** Update DNS to point to self *****
-        DnsServerAddress UpdateDNSToSelf
-        { 
-            Address         = '127.0.0.1' 
-            InterfaceAlias  = $InterfaceAlias
-            AddressFamily   = 'IPv4'
-            DependsOn       = "[WaitForADDomain]WaitForChildDCReady"
-        }
-
         # ***** Create OUs *****
+        # Note: DNS will be updated to include this DC via VNet DNS deployment
         xScript CreateOUs
         {
             SetScript = {
@@ -202,7 +194,7 @@ configuration CreateChildDomain {
             {
                 return $false
             }
-            DependsOn = "[DnsServerAddress]UpdateDNSToSelf"
+            DependsOn = "[WaitForADDomain]WaitForChildDCReady"
         }
 
         # ***** Create Domain Users *****

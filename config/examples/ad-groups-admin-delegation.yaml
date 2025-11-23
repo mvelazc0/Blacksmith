@@ -4,8 +4,8 @@
 
 name: "ad-groups-admin-lab"
 description: "Lab demonstrating AD groups with granular local administrator delegation for attack path scenarios"
-location: "eastus"
-resource_group: "rg-blacksmith-admin-groups"
+location: "westus2"
+resource_group: "rg-blacksmith-admin-groups11"
 
 # Network Configuration
 network:
@@ -17,6 +17,8 @@ network:
       address_prefix: "192.168.1.0/24"
     - name: "snet-workstations"
       address_prefix: "192.168.2.0/24"
+    - name: "snet-attack"
+      address_prefix: "192.168.4.0/24"
   
   nsg:
     name: "nsg-lab"
@@ -89,6 +91,28 @@ virtual_machines:
     network:
       subnet: "snet-workstations"
       ip_start: "192.168.2.10"
+
+# Attack VM Configuration
+attack_vm:
+  enabled: true
+  name: "UBUNTU01"
+  type: "ubuntu"  # Using Ubuntu due to Azure Marketplace restrictions on Kali
+  size: "Standard_B2ms"
+  os:
+    # Ubuntu Server 22.04 LTS (no Marketplace restrictions)
+    publisher: "Canonical"
+    offer: "0001-com-ubuntu-server-jammy"
+    sku: "22_04-lts-gen2"
+    version: "latest"
+  network:
+    subnet: "snet-attack"
+    private_ip: "192.168.4.10"
+  # Optional: Pre-install attack tools (will be installed via custom script)
+  tools:
+    - "nmap"  # Minimal test - just install nmap
+  # Optional: Custom scripts to run on first boot
+  # custom_scripts:
+  #   - "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/bash/Install-C2s.sh"
 
 # Active Directory Configuration
 active_directory:
