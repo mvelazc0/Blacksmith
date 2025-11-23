@@ -26,6 +26,12 @@
         "description": "Parent domain FQDN (e.g., corp.local)"
       }
     },
+    "parentDomainNetbiosName": {
+      "type": "string",
+      "metadata": {
+        "description": "Parent domain NetBIOS name (e.g., CORP)"
+      }
+    },
     "parentDCIPAddress": {
       "type": "string",
       "metadata": {
@@ -95,7 +101,8 @@
             "AdminCreds": {
               "UserName": "[parameters('adminUsername')]",
               "Password": "[parameters('adminPassword')]"
-            }
+            },
+            "ParentDomainNetbiosName": "[parameters('parentDomainNetbiosName')]"
           }
         }
       }

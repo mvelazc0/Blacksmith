@@ -14,6 +14,9 @@ configuration CreateChildDomain {
         [Parameter(Mandatory)]
         [String]$ParentDomainFQDN,
 
+        [Parameter(Mandatory)]
+        [String]$ParentDomainNetbiosName,
+
         [Parameter(Mandatory=$false)]
         [String]$DomainNetbiosName,
 
@@ -50,7 +53,6 @@ configuration CreateChildDomain {
     $DomainNameArray | Select-Object -Skip 1 | ForEach-Object {$DCPathString = $DCPathString + ',DC=' + $_}
     
     # Parent domain credentials
-    [String] $ParentDomainNetbiosName = (Get-NetBIOSName -DomainFQDN $ParentDomainFQDN)
     [System.Management.Automation.PSCredential]$ParentDomainCreds = New-Object System.Management.Automation.PSCredential ("$ParentDomainNetbiosName\$($AdminCreds.UserName)", $AdminCreds.Password)
 
     Node localhost

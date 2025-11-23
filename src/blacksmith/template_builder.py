@@ -1528,6 +1528,7 @@ class TemplateBuilder:
             vm for vm in vms
             if vm.get('role') != 'domain_controller'
             and vm.get('type') != 'windows_desktop'
+            and vm.get('join_domain', True)  # Respect join_domain flag (default: True)
         ]
         
         for vm in servers_to_join:
@@ -2322,6 +2323,9 @@ class TemplateBuilder:
                     "parentDomainFQDN": {
                         "value": parent_fqdn
                     },
+                    "parentDomainNetbiosName": {
+                        "value": parent_netbios
+                    },
                     "parentDCIPAddress": {
                         "value": parent_dc_ip
                     },
@@ -2672,6 +2676,10 @@ class TemplateBuilder:
         ou_path = f"OU=Servers;DC={';DC='.join(domain_parts)}"
         
         for vm in server_vms:
+            # Skip if join_domain is explicitly set to false
+            if not vm.get('join_domain', True):
+                continue
+            
             count = vm.get('count', 1)
             
             # Handle multiple instances
