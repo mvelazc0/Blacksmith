@@ -127,10 +127,9 @@ configuration CreateChildDomain {
         }
          
         # ***** Create Child Domain *****
-        ADDomain CreateChildDomain 
+        ADDomain CreateChildDomain
         {
-            DomainName                      = $ChildDomainFQDN
-            DomainType                      = 'ChildDomain'
+            DomainName                      = $ChildDomainName
             ParentDomainName                = $ParentDomainFQDN
             Credential                      = $ParentDomainCreds
             SafemodeAdministratorPassword   = $AdminCreds
