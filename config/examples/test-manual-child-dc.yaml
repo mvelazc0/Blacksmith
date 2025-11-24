@@ -4,7 +4,7 @@
 name: "manual-child-dc-test"
 description: "Simple lab for manual child domain DSC testing"
 location: "eastus"
-resource_group: "rg-manual-child-test"
+resource_group: "rg-manual-child-test2"
 
 # Network Configuration
 network:
@@ -59,7 +59,7 @@ active_directory:
     - first_name: "Test"
       last_name: "User"
       sam_account: "testuser"
-      password: "TestPass123!"
+      password: "ComplexP@ssw0rd123!"
       department: "IT"
       job_title: "Administrator"
       groups: ["Domain Admins"]

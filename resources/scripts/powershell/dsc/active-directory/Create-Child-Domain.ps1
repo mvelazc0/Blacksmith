@@ -52,8 +52,9 @@ configuration CreateChildDomain {
     $DCPathString = "DC=" + $DomainNameArray[0]
     $DomainNameArray | Select-Object -Skip 1 | ForEach-Object {$DCPathString = $DCPathString + ',DC=' + $_}
     
-    # Parent domain credentials
-    [System.Management.Automation.PSCredential]$ParentDomainCreds = New-Object System.Management.Automation.PSCredential ("$ParentDomainNetbiosName\$($AdminCreds.UserName)", $AdminCreds.Password)
+    # Parent domain credentials - Use UPN format (works better than DOMAIN\user)
+    $parentDomainUserUPN = "$($AdminCreds.UserName)@$ParentDomainFQDN"
+    [System.Management.Automation.PSCredential]$ParentDomainCreds = New-Object System.Management.Automation.PSCredential ($parentDomainUserUPN, $AdminCreds.Password)
 
     Node localhost
     {
@@ -129,14 +130,13 @@ configuration CreateChildDomain {
         }
          
         # ***** Create Child Domain *****
-        # Note: Using ParentDomainCreds (Enterprise Admin from parent) for child domain creation
+        # Using ParentDomainCreds (CORP\labadmin - Enterprise Admin) for child domain creation
         ADDomain CreateChildDomain
         {
             DomainName                      = $ChildDomainName
             DomainNetBiosName               = $DomainNetbiosName
             ParentDomainName                = $ParentDomainFQDN
-            Credential                      = $AdminCreds
-            DnsDelegationCredential         = $ParentDomainCreds
+            Credential                      = $ParentDomainCreds
             SafemodeAdministratorPassword   = $AdminCreds
             DatabasePath                    = "C:\NTDS"
             LogPath                         = "C:\NTDS"
