@@ -220,7 +220,13 @@ configuration CreateChildDomain {
                 $DomainName = $using:ChildDomainFQDN
                 $ADServer = $using:ComputerName+"."+$DomainName
 
-                $NewDomainUsers = $using:DomainUsers
+                # Handle both direct array and {array: [...]} format from ARM
+                $DomainUsersParam = $using:DomainUsers
+                if ($DomainUsersParam -is [hashtable] -and $DomainUsersParam.ContainsKey('array')) {
+                    $NewDomainUsers = $DomainUsersParam.array
+                } else {
+                    $NewDomainUsers = $DomainUsersParam
+                }
                 
                 foreach ($DomainUser in $NewDomainUsers)
                 {
@@ -303,7 +309,13 @@ configuration CreateChildDomain {
                 # Check if DomainGroups parameter was provided
                 $NewDomainGroups = $null
                 try {
-                    $NewDomainGroups = $using:DomainGroups
+                    # Handle both direct array and {array: [...]} format from ARM
+                    $DomainGroupsParam = $using:DomainGroups
+                    if ($DomainGroupsParam -is [hashtable] -and $DomainGroupsParam.ContainsKey('array')) {
+                        $NewDomainGroups = $DomainGroupsParam.array
+                    } else {
+                        $NewDomainGroups = $DomainGroupsParam
+                    }
                 } catch {
                     write-host "No domain groups defined, skipping group creation"
                 }
