@@ -2611,15 +2611,29 @@ class TemplateBuilder:
             workstation_vm, domain_fqdn
         )
         
+        # Determine dependencies - must wait for domain to be created
+        join_dependencies = [
+            "[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]",
+            "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
+        ]
+        
+        # Add dependency on domain creation (forest root or child domain)
+        domains = self.config.get('domains', [])
+        target_domain = next((d for d in domains if d['name'] == domain_fqdn), None)
+        if target_domain:
+            if target_domain['type'] == 'forest_root':
+                target_netbios = target_domain.get('netbios', self._derive_netbios(domain_fqdn))
+                join_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateADForest-{target_netbios}')]")
+            else:  # child_domain
+                target_netbios = target_domain.get('netbios', self._derive_netbios(domain_fqdn))
+                join_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateChildDomain-{target_netbios}')]")
+        
         # Nested deployment
         deployment = {
             "type": "Microsoft.Resources/deployments",
             "apiVersion": "2021-04-01",
             "name": f"JoinWorkstations-{domain_netbios}",
-            "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]",
-                "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
-            ],
+            "dependsOn": join_dependencies,
             "properties": {
                 "mode": "Incremental",
                 "templateLink": {
