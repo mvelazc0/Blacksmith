@@ -30,6 +30,14 @@ class TemplateBuilder:
             "outputs": {}
         }
         self.base_dir = Path(__file__).parent.parent.parent
+        
+        # Generate random suffix if enabled (3 lowercase alphanumeric characters)
+        # Using 3 chars to ensure VM names stay within Windows 15-char limit
+        self.random_suffix = ""
+        if config.get('append_random_suffix', False):
+            import random
+            import string
+            self.random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=3))
     
     def _get_domain_mode(self) -> str:
         """
@@ -387,32 +395,39 @@ class TemplateBuilder:
         else:
             prefix = 'VM'  # Fallback default
         
-        # If count is 1 and we have a name (not suffix), just use the name as-is
+        # Generate base VM name
         if count == 1 and base_name and not suffix:
-            return base_name
-        
-        # Generate number with zero-padding (01, 02, etc.)
-        # Determine padding based on count
-        if count < 10:
-            number = f"{(index + 1):02d}"  # Always use 2 digits for consistency (01-09)
-        elif count < 100:
-            number = f"{(index + 1):02d}"
+            # Single VM with explicit name (e.g., "LABDC01")
+            vm_name = base_name
         else:
-            number = f"{(index + 1):03d}"
+            # Multiple VMs or using suffix pattern
+            # Generate number with zero-padding (01, 02, etc.)
+            if count < 10:
+                number = f"{(index + 1):02d}"  # Always use 2 digits for consistency (01-09)
+            elif count < 100:
+                number = f"{(index + 1):02d}"
+            else:
+                number = f"{(index + 1):03d}"
+            
+            # Apply naming pattern
+            if naming_pattern == 'suffix-number':
+                # e.g., srv01, srv02
+                vm_name = f"{prefix}{number}"
+            elif naming_pattern == 'number-suffix':
+                # e.g., 01srv, 02srv
+                vm_name = f"{number}{prefix}"
+            elif naming_pattern == 'suffix-only':
+                # e.g., srv1, srv2 (no zero padding)
+                vm_name = f"{prefix}{(index + 1)}"
+            else:
+                # Default to suffix-number
+                vm_name = f"{prefix}{number}"
         
-        # Apply naming pattern
-        if naming_pattern == 'suffix-number':
-            # e.g., srv01, srv02
-            return f"{prefix}{number}"
-        elif naming_pattern == 'number-suffix':
-            # e.g., 01srv, 02srv
-            return f"{number}{prefix}"
-        elif naming_pattern == 'suffix-only':
-            # e.g., srv1, srv2 (no zero padding)
-            return f"{prefix}{(index + 1)}"
-        else:
-            # Default to suffix-number
-            return f"{prefix}{number}"
+        # Append random suffix if enabled (e.g., LABDC01-a3f2, WS01-a3f2)
+        if self.random_suffix:
+            vm_name = f"{vm_name}-{self.random_suffix}"
+        
+        return vm_name
     
     def _add_compute_resources(self):
         """Add compute resources (VMs) to the template."""
@@ -420,12 +435,8 @@ class TemplateBuilder:
         network = self.config.get('network', {})
         remote_access = network.get('remote_access', {})
         
-        # Only create DC and servers directly - workstations will be created via nested deployment
+        # Create ALL VMs directly (DCs, servers, AND workstations)
         for vm in vms:
-            # Skip workstations - they'll be handled by Win10 nested deployment
-            if vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop':
-                continue
-                
             count = vm.get('count', 1)
             
             # For VMs with count > 1, create multiple instances
@@ -452,9 +463,6 @@ class TemplateBuilder:
                 # Virtual Machine
                 vm_resource = self._create_vm_resource(vm, instance_name)
                 self.template["resources"].append(vm_resource)
-        
-        # Add workstations via nested deployment
-        self._add_workstations_deployment()
     
     def _add_attack_vm(self):
         """Add attack VM for red team exercises if enabled."""
@@ -923,7 +931,8 @@ class TemplateBuilder:
             dc_vm = next((vm for vm in vms if vm.get('role') == 'domain_controller'), None)
             
             if dc_vm:
-                dc_name = dc_vm.get('name')
+                # Generate DC name with random suffix if enabled
+                dc_name = self._generate_vm_name(dc_vm, 0)
                 dc_ip = dc_vm.get('network', {}).get('private_ip', '192.168.1.4')
                 
                 # Step 1: Add prep script to install DSC modules on DC
@@ -935,11 +944,8 @@ class TemplateBuilder:
                 # Step 3: Update VNet DNS to point to DC
                 self._add_update_vnet_dns_deployment(dc_ip)
                 
-                # Step 4: Join workstations to domain (via nested deployment)
-                self._add_domain_join_deployment(dc_name, dc_ip, ad_config)
-                
-                # Step 5: Join servers to domain (via DSC extensions)
-                self._add_server_domain_join_extensions(dc_name, dc_ip, ad_config)
+                # Step 4: Join all VMs to domain (servers + workstations via DSC extensions)
+                self._add_domain_join_extensions(dc_name, dc_ip, ad_config)
     
     def _add_multi_domain_ad_resources(self):
         """Add AD resources for multi-domain configuration."""
@@ -1044,7 +1050,12 @@ class TemplateBuilder:
         command_to_execute = " && ".join(commands)
         
         # Determine extension name based on VM type
-        extension_name = "SetUpDC" if vm_type == 'dc' else "SetUpServer"
+        if vm_type == 'dc':
+            extension_name = "SetUpDC"
+        elif vm_type == 'workstation':
+            extension_name = "SetUpWorkstation"
+        else:
+            extension_name = "SetUpServer"
         
         # Build extension resource
         extension = {
@@ -1311,262 +1322,6 @@ class TemplateBuilder:
         self.template["resources"].append(deployment)
     
     
-    def _add_workstations_deployment(self):
-        """Add nested deployment to create workstations using Win10 template."""
-        vms = self.config.get('virtual_machines', [])
-        network = self.config.get('network', {})
-        remote_access = network.get('remote_access', {})
-        
-        # Find workstation VMs
-        workstation_vms = [vm for vm in vms if vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop']
-        
-        if not workstation_vms:
-            return
-        
-        # For now, handle single workstation config (can be extended for multiple)
-        workstation = workstation_vms[0]
-        count = workstation.get('count', 1)
-        suffix = workstation.get('suffix', '')
-        naming_pattern = workstation.get('naming_pattern', 'suffix-number')
-        
-        # Get IP configuration
-        vm_network = workstation.get('network', {})
-        
-        # Resolve subnet - use domain-aware resolution in multi-domain mode
-        if self._get_domain_mode() == 'multi':
-            vm_domain = self._get_vm_domain(workstation)
-            subnet_name = self._resolve_vm_subnet(workstation, vm_domain)
-        else:
-            subnet_name = vm_network.get('subnet', 'default')
-        
-        # Calculate starting IP for the first workstation
-        private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
-        ip_suffix = int(private_ip.split('.')[-1])
-        
-        # Determine prefix and suffix for Win10 template
-        # The Win10 template uses vmNamePrefix + vmNameSuffix pattern
-        # IMPORTANT: vmNameSuffix is used for BOTH naming AND IP calculation in Win10 template
-        # So we need to use the IP suffix, not just 1
-        if suffix:
-            # User provided a suffix - use it as the prefix
-            vm_name_prefix = suffix
-            vm_name_suffix = ip_suffix  # Use IP suffix for proper IP allocation
-        else:
-            # No suffix provided - use the configured name
-            configured_name = workstation.get('name', 'WORKSTATION')
-            # Extract any trailing number from the name
-            import re
-            match = re.match(r'^(.+?)(\d+)$', configured_name)
-            if match:
-                vm_name_prefix = match.group(1)  # e.g., "WORKSTATION"
-                vm_name_suffix = int(match.group(2))  # e.g., 5
-            else:
-                # No number at end
-                vm_name_prefix = configured_name
-                vm_name_suffix = ip_suffix  # Use IP suffix
-        
-        # Find the subnet configuration to get address prefix
-        # In multi-domain mode, check both global and domain-specific subnets
-        subnet_range = '192.168.1.0/24'  # default
-        
-        if self._get_domain_mode() == 'multi':
-            # Check global subnets
-            global_subnets = network.get('subnets', [])
-            for subnet in global_subnets:
-                if subnet.get('name') == subnet_name:
-                    subnet_range = subnet.get('address_prefix', '192.168.1.0/24')
-                    break
-            
-            # Check domain-specific subnets
-            if subnet_range == '192.168.1.0/24':  # Not found in global
-                domains = self.config.get('domains', [])
-                for domain in domains:
-                    domain_subnets = domain.get('subnets', [])
-                    for subnet in domain_subnets:
-                        if subnet.get('name') == subnet_name:
-                            subnet_range = subnet.get('address_prefix', '192.168.1.0/24')
-                            break
-                    if subnet_range != '192.168.1.0/24':
-                        break
-        else:
-            # Single-domain mode - check network subnets
-            subnets = network.get('subnets', [])
-            for subnet in subnets:
-                if subnet.get('name') == subnet_name:
-                    subnet_range = subnet.get('address_prefix', '192.168.1.0/24')
-                    break
-        
-        # Get OS configuration
-        os_config = workstation.get('os', {})
-        sku = os_config.get('sku', 'win10-22h2-pro')
-        
-        # Build dependencies list
-        dependencies = [
-            "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
-        ]
-        
-        # Add NSG dependency if it exists
-        nsg_config = network.get('nsg', {})
-        if nsg_config:
-            nsg_name = nsg_config.get('name', 'nsg-rdp-allow')
-            dependencies.append(f"[resourceId('Microsoft.Network/networkSecurityGroups', '{nsg_name}')]")
-        
-        # Nested deployment that calls the Win10 template
-        deployment = {
-            "type": "Microsoft.Resources/deployments",
-            "apiVersion": "2021-04-01",
-            "name": "deployWorkstations",
-            "dependsOn": dependencies,
-            "properties": {
-                "mode": "Incremental",
-                "templateLink": {
-                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10/azuredeploy.json",
-                    "contentVersion": "1.0.0.0"
-                },
-                "parameters": {
-                    "adminUsername": {
-                        "value": "[parameters('adminUsername')]"
-                    },
-                    "adminPassword": {
-                        "value": "[parameters('adminPassword')]"
-                    },
-                    "numberOfWorkstations": {
-                        "value": count
-                    },
-                    "vmNamePrefix": {
-                        "value": vm_name_prefix
-                    },
-                    "vmNameSuffix": {
-                        "value": vm_name_suffix
-                    },
-                    "windowsDesktopSKU": {
-                        "value": sku
-                    },
-                    "windowsDesktopVersion": {
-                        "value": os_config.get('version', 'latest')
-                    },
-                    "vmSize": {
-                        "value": workstation.get('size', 'Standard_B2ms')
-                    },
-                    "newOrExistingVnet": {
-                        "value": "existing"
-                    },
-                    "virtualNetworkName": {
-                        "value": "[variables('virtualNetworkName')]"
-                    },
-                    "virtualNetworkAddressRange": {
-                        "value": "[variables('virtualNetworkAddressRange')]"
-                    },
-                    "newOrExistingSubnet": {
-                        "value": "existing"
-                    },
-                    "subnetName": {
-                        "value": subnet_name
-                    },
-                    "subnetRange": {
-                        "value": subnet_range
-                    },
-                    "newOrExistingNSG": {
-                        "value": "existing" if network.get('nsg') else "new"
-                    },
-                    "networkSecurityGroupName": {
-                        "value": network.get('nsg', {}).get('name', 'nsg-rdp-allow')
-                    },
-                    "remoteAccessMode": {
-                        "value": remote_access.get('mode', 'AllowPublicIP')
-                    },
-                    "allowedIPAddresses": {
-                        "value": remote_access.get('allowed_ips', '*')
-                    },
-                    "newOrExistingBastion": {
-                        "value": "existing"
-                    },
-                    "identityType": {
-                        "value": "SystemAssigned"
-                    },
-                    "enableSysmon": {
-                        "value": False
-                    },
-                    "location": {
-                        "value": "[parameters('location')]"
-                    }
-                }
-            }
-        }
-        
-        self.template["resources"].append(deployment)
-    
-    def _add_domain_join_deployment(self, dc_name: str, dc_ip: str, ad_config: Dict[str, Any]):
-        """Add nested deployment to join workstations to domain using existing ARM template."""
-        domain_fqdn = ad_config.get('domain_fqdn', 'blacksmith.local')
-        domain_netbios = ad_config.get('domain_netbios', 'BLACKSMITH')
-        
-        # Build OU path
-        domain_parts = domain_fqdn.split('.')
-        ou_path = f"OU=Workstations;DC={';DC='.join(domain_parts)}"
-        
-        # Check if we have workstations to join
-        vms = self.config.get('virtual_machines', [])
-        workstation_vms = [vm for vm in vms if vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop']
-        has_workstations = len(workstation_vms) > 0
-        
-        if has_workstations:
-            # Get local admin groups for workstations (use first workstation config as representative)
-            workstation_vm = workstation_vms[0]
-            local_admin_groups = self._get_local_admin_groups_for_vm(workstation_vm)
-            
-            # Nested deployment that calls the existing joinDomain template
-            # Uses output from deployWorkstations nested deployment
-            deployment = {
-                "type": "Microsoft.Resources/deployments",
-                "apiVersion": "2021-04-01",
-                "name": "JoinWorkstations",
-                "dependsOn": [
-                    "[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]",
-                    "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
-                ],
-                "properties": {
-                    "mode": "Incremental",
-                    "templateLink": {
-                        "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD/nestedtemplates/joinDomain.json",
-                        "contentVersion": "1.0.0.0"
-                    },
-                    "parameters": {
-                        "virtualMachines": {
-                            "value": "[reference('deployWorkstations').outputs.allWinVMsDeployed.value]"
-                        },
-                        "joinDomainScript": {
-                            "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip"
-                        },
-                        "domainFQDN": {
-                            "value": domain_fqdn
-                        },
-                        "domainNetbiosName": {
-                            "value": domain_netbios
-                        },
-                        "adminUsername": {
-                            "value": "[parameters('adminUsername')]"
-                        },
-                        "adminPassword": {
-                            "value": "[parameters('adminPassword')]"
-                        },
-                        "dcIpAddress": {
-                            "value": dc_ip
-                        },
-                        "joinOU": {
-                            "value": ou_path
-                        },
-                        "localAdminGroups": {
-                            "value": local_admin_groups
-                        },
-                        "location": {
-                            "value": "[parameters('location')]"
-                        }
-                    }
-                }
-            }
-            
-            self.template["resources"].append(deployment)
     
     def _get_local_admin_groups_for_vm(self, vm: Dict[str, Any], instance_name: str = None) -> List[str]:
         """
@@ -1617,26 +1372,35 @@ class TemplateBuilder:
         
         return local_admin_groups
     
-    def _add_server_domain_join_extensions(self, dc_name: str, dc_ip: str, ad_config: Dict[str, Any]):
-        """Add prep and domain join extensions for servers."""
+    def _add_domain_join_extensions(self, dc_name: str, dc_ip: str, ad_config: Dict[str, Any]):
+        """Add prep and domain join extensions for all non-DC VMs (servers + workstations)."""
         domain_fqdn = ad_config.get('domain_fqdn', 'blacksmith.local')
         domain_netbios = ad_config.get('domain_netbios', 'BLACKSMITH')
         
-        # Build OU path for servers
+        # Build OU paths
         domain_parts = domain_fqdn.split('.')
-        ou_path = f"OU=Servers;DC={';DC='.join(domain_parts)}"
         
-        # Get all server VMs that need to join the domain (not the DC itself, not workstations)
+        # Get all VMs that need to join the domain (not the DC itself)
         vms = self.config.get('virtual_machines', [])
-        servers_to_join = [
+        vms_to_join = [
             vm for vm in vms
             if vm.get('role') != 'domain_controller'
-            and vm.get('type') != 'windows_desktop'
             and vm.get('join_domain', True)  # Respect join_domain flag (default: True)
         ]
         
-        for vm in servers_to_join:
+        for vm in vms_to_join:
             count = vm.get('count', 1)
+            vm_type = vm.get('type')
+            
+            # Determine OU based on VM type
+            if vm_type == 'windows_desktop':
+                ou_path = f"OU=Workstations;DC={';DC='.join(domain_parts)}"
+                extension_type = 'workstation'
+                extension_name = 'SetUpWorkstation'
+            else:
+                ou_path = f"OU=Servers;DC={';DC='.join(domain_parts)}"
+                extension_type = 'server'
+                extension_name = 'SetUpServer'
             
             # Handle multiple instances
             for i in range(count):
@@ -1646,7 +1410,7 @@ class TemplateBuilder:
                 local_admin_groups = self._get_local_admin_groups_for_vm(vm, instance_name)
                 
                 # Step 1: Add unified prep extension (prep + security software)
-                prep_extension = self._build_unified_prep_extension(vm, instance_name, 'server')
+                prep_extension = self._build_unified_prep_extension(vm, instance_name, extension_type)
                 self.template["resources"].append(prep_extension)
                 
                 # Step 2: DSC extension for domain join (depends on prep)
@@ -1656,7 +1420,7 @@ class TemplateBuilder:
                     "name": f"{instance_name}/JoinDomain",
                     "location": "[parameters('location')]",
                     "dependsOn": [
-                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', 'SetUpServer')]",
+                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', '{extension_name}')]",
                         "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
                     ],
                     "properties": {
@@ -1677,68 +1441,6 @@ class TemplateBuilder:
                                 "DCIPAddress": dc_ip,
                                 "JoinOU": ou_path,
                                 "LocalAdminGroups": local_admin_groups
-                            }
-                        },
-                        "protectedSettings": {
-                            "configurationArguments": {
-                                "AdminCreds": {
-                                    "UserName": "[parameters('adminUsername')]",
-                                    "Password": "[parameters('adminPassword')]"
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                self.template["resources"].append(join_extension)
-    
-    def _add_domain_join_extensions(self, dc_name: str, dc_ip: str, ad_config: Dict[str, Any]):
-        """Add DSC extensions to join workstations to the domain."""
-        domain_fqdn = ad_config.get('domain_fqdn', 'blacksmith.local')
-        domain_netbios = ad_config.get('domain_netbios', 'BLACKSMITH')
-        
-        # Build OU path
-        domain_parts = domain_fqdn.split('.')
-        ou_path = f"OU=Workstations;DC={';DC='.join(domain_parts)}"
-        
-        # Get all VMs that need to join the domain (not the DC itself)
-        vms = self.config.get('virtual_machines', [])
-        vms_to_join = [vm for vm in vms if vm.get('role') != 'domain_controller']
-        
-        for vm in vms_to_join:
-            count = vm.get('count', 1)
-            
-            # Handle multiple instances
-            for i in range(count):
-                instance_name = self._generate_vm_name(vm, i)
-                
-                # DSC extension for domain join
-                join_extension = {
-                    "type": "Microsoft.Compute/virtualMachines/extensions",
-                    "apiVersion": "2021-11-01",
-                    "name": f"{instance_name}/JoinDomain",
-                    "location": "[parameters('location')]",
-                    "dependsOn": [
-                        f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]",
-                        "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
-                    ],
-                    "properties": {
-                        "publisher": "Microsoft.Powershell",
-                        "type": "DSC",
-                        "typeHandlerVersion": "2.77",
-                        "autoUpgradeMinorVersion": True,
-                        "settings": {
-                            "wmfVersion": "latest",
-                            "configuration": {
-                                "url": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip",
-                                "script": "Join-Domain.ps1",
-                                "function": "Join-Domain"
-                            },
-                            "configurationArguments": {
-                                "DomainFQDN": domain_fqdn,
-                                "DomainNetbiosName": domain_netbios,
-                                "DCIPAddress": dc_ip,
-                                "JoinOU": ou_path
                             }
                         },
                         "protectedSettings": {
@@ -2043,28 +1745,11 @@ class TemplateBuilder:
                 # Generate instance names for all VMs with this config
                 count = vm.get('count', 1)
                 for i in range(count):
-                    if is_workstation:
-                        # Workstations use Win10 template naming: prefix + ip_suffix
-                        # e.g., "dev" + "10" = "dev10"
-                        vm_network = vm.get('network', {})
-                        private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
-                        ip_suffix = int(private_ip.split('.')[-1])
-                        suffix = vm.get('suffix', '')
-                        if suffix:
-                            instance_name = f"{suffix}{ip_suffix + i}"
-                        else:
-                            configured_name = vm.get('name', 'WORKSTATION')
-                            import re
-                            match = re.match(r'^(.+?)(\d+)$', configured_name)
-                            if match:
-                                instance_name = f"{match.group(1)}{int(match.group(2)) + i}"
-                            else:
-                                instance_name = f"{configured_name}{ip_suffix + i}"
-                    else:
-                        # Regular VMs use our standard naming
-                        instance_name = self._generate_vm_name(vm, i)
+                    # All VMs now use standard naming (including workstations)
+                    instance_name = self._generate_vm_name(vm, i)
                     
-                    vm_instances.append({"vmName": instance_name})
+                    # Include VM config so we can check role later
+                    vm_instances.append({"vmName": instance_name, "vmConfig": vm})
             
             if not vm_instances:
                 continue
@@ -2076,14 +1761,19 @@ class TemplateBuilder:
                 f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]"
             ]
             
-            # If targeting workstations, depend on workstation deployment
-            if has_workstations:
-                agent_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]")
-            
-            # Add dependency on domain join if AD is enabled
+            # Add dependencies on VMs and their extensions
             ad_config = self.config.get('active_directory', {})
-            if ad_config.get('enabled') and has_workstations:
-                agent_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
+            for vm_instance in target_vms:
+                vm_name = vm_instance['vmName']
+                vm_config = vm_instance['vmConfig']
+                agent_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines', '{vm_name}')]")
+                
+                # If AD enabled, depend on domain join extension
+                # BUT skip domain controller - it doesn't join the domain, it creates it
+                if ad_config.get('enabled') and vm_config.get('role') != 'domain_controller':
+                    agent_dependencies.append(
+                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{vm_name}', 'JoinDomain')]"
+                    )
             
             # Deploy Azure Monitor Agent extension
             agent_deployment = {
@@ -2145,48 +1835,23 @@ class TemplateBuilder:
                 
                 # Create associations for all instances of this VM
                 for i in range(count):
-                    if is_workstation:
-                        # Workstations use Win10 template naming: prefix + ip_suffix
-                        vm_network = vm.get('network', {})
-                        private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
-                        ip_suffix = int(private_ip.split('.')[-1])
-                        suffix = vm.get('suffix', '')
-                        if suffix:
-                            instance_name = f"{suffix}{ip_suffix + i}"
-                        else:
-                            configured_name = vm.get('name', 'WORKSTATION')
-                            import re
-                            match = re.match(r'^(.+?)(\d+)$', configured_name)
-                            if match:
-                                instance_name = f"{match.group(1)}{int(match.group(2)) + i}"
-                            else:
-                                instance_name = f"{configured_name}{ip_suffix + i}"
-                    else:
-                        # Regular VMs use our standard naming
-                        instance_name = self._generate_vm_name(vm, i)
+                    # All VMs now use standard naming (including workstations)
+                    instance_name = self._generate_vm_name(vm, i)
                     
-                    # Build dependencies - check if VM is created directly or via nested deployment
+                    # Build dependencies - all VMs now created directly
                     association_dependencies = [
                         f"[resourceId('Microsoft.Insights/dataCollectionRules', '{dcr_name}')]",
-                        f"[resourceId('Microsoft.Resources/deployments', 'installAzureMonitorAgents-{dcr_name}')]"
+                        f"[resourceId('Microsoft.Resources/deployments', 'installAzureMonitorAgents-{dcr_name}')]",
+                        f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]"
                     ]
                     
-                    # If VM is a workstation (created via nested deployment), depend on that deployment
-                    # Otherwise depend on the VM resource directly
-                    if is_workstation:
-                        association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]")
-                        # Add dependency on workstation domain join if AD is enabled
-                        ad_config = self.config.get('active_directory', {})
-                        if ad_config.get('enabled'):
-                            association_dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
-                    else:
-                        # Server VM - depend on the VM and its domain join extension
-                        association_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]")
-                        # Add dependency on server domain join extension if AD is enabled
-                        # BUT skip domain controller - it doesn't join the domain, it creates it
-                        ad_config = self.config.get('active_directory', {})
-                        if ad_config.get('enabled') and vm.get('role') != 'domain_controller':
-                            association_dependencies.append(f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', 'JoinDomain')]")
+                    # Add dependency on domain join extension if AD is enabled
+                    # BUT skip domain controller - it doesn't join the domain, it creates it
+                    ad_config = self.config.get('active_directory', {})
+                    if ad_config.get('enabled') and vm.get('role') != 'domain_controller':
+                        association_dependencies.append(
+                            f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', 'JoinDomain')]"
+                        )
                     
                     # Create DCR association - this will automatically install Azure Monitor Agent
                     association = {
@@ -2654,125 +2319,40 @@ class TemplateBuilder:
             if not domain_vms:
                 continue
             
-            # Separate workstations and servers
-            workstation_vms = [vm for vm in domain_vms if vm.get('type') == 'windows_desktop']
-            server_vms = [vm for vm in domain_vms if vm.get('type') != 'windows_desktop']
-            
-            # Join workstations via nested deployment
-            if workstation_vms:
-                self._add_domain_join_deployment_for_domain(
-                    domain_fqdn, domain_netbios, dc_ip, workstation_vms, "Workstations"
-                )
-            
-            # Join servers via DSC extensions
-            if server_vms:
-                self._add_server_domain_join_extensions_for_domain(
-                    domain_fqdn, domain_netbios, dc_ip, server_vms
+            # Join all VMs (servers + workstations) via DSC extensions
+            if domain_vms:
+                self._add_domain_join_extensions_for_domain(
+                    domain_fqdn, domain_netbios, dc_ip, domain_vms
                 )
     
-    def _add_domain_join_deployment_for_domain(
-        self, 
-        domain_fqdn: str, 
-        domain_netbios: str, 
-        dc_ip: str, 
-        workstation_vms: List[Dict[str, Any]],
-        ou_name: str
-    ):
-        """Add nested deployment to join workstations to a specific domain."""
-        # Build OU path
-        domain_parts = domain_fqdn.split('.')
-        ou_path = f"OU={ou_name};DC={';DC='.join(domain_parts)}"
-        
-        # Get local admin groups for workstations (use first workstation as representative)
-        workstation_vm = workstation_vms[0]
-        local_admin_groups = self._get_local_admin_groups_for_vm_multi_domain(
-            workstation_vm, domain_fqdn
-        )
-        
-        # Determine dependencies - must wait for domain to be created
-        join_dependencies = [
-            "[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]",
-            "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
-        ]
-        
-        # Add dependency on domain creation (forest root or child domain)
-        domains = self.config.get('domains', [])
-        target_domain = next((d for d in domains if d['name'] == domain_fqdn), None)
-        if target_domain:
-            if target_domain['type'] == 'forest_root':
-                target_netbios = target_domain.get('netbios', self._derive_netbios(domain_fqdn))
-                join_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateADForest-{target_netbios}')]")
-            else:  # child_domain
-                target_netbios = target_domain.get('netbios', self._derive_netbios(domain_fqdn))
-                join_dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'CreateChildDomain-{target_netbios}')]")
-        
-        # Nested deployment
-        deployment = {
-            "type": "Microsoft.Resources/deployments",
-            "apiVersion": "2021-04-01",
-            "name": f"JoinWorkstations-{domain_netbios}",
-            "dependsOn": join_dependencies,
-            "properties": {
-                "mode": "Incremental",
-                "templateLink": {
-                    "uri": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD/nestedtemplates/joinDomain.json",
-                    "contentVersion": "1.0.0.0"
-                },
-                "parameters": {
-                    "virtualMachines": {
-                        "value": "[reference('deployWorkstations').outputs.allWinVMsDeployed.value]"
-                    },
-                    "joinDomainScript": {
-                        "value": "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/dsc/active-directory/Join-Domain.zip"
-                    },
-                    "domainFQDN": {
-                        "value": domain_fqdn
-                    },
-                    "domainNetbiosName": {
-                        "value": domain_netbios
-                    },
-                    "adminUsername": {
-                        "value": "[parameters('adminUsername')]"
-                    },
-                    "adminPassword": {
-                        "value": "[parameters('adminPassword')]"
-                    },
-                    "dcIpAddress": {
-                        "value": dc_ip
-                    },
-                    "joinOU": {
-                        "value": ou_path
-                    },
-                    "localAdminGroups": {
-                        "value": local_admin_groups
-                    },
-                    "location": {
-                        "value": "[parameters('location')]"
-                    }
-                }
-            }
-        }
-        
-        self.template["resources"].append(deployment)
-    
-    def _add_server_domain_join_extensions_for_domain(
+    def _add_domain_join_extensions_for_domain(
         self,
         domain_fqdn: str,
         domain_netbios: str,
         dc_ip: str,
-        server_vms: List[Dict[str, Any]]
+        vms_to_join: List[Dict[str, Any]]
     ):
-        """Add domain join extensions for servers in a specific domain."""
-        # Build OU path for servers
+        """Add domain join extensions for VMs (servers + workstations) in a specific domain."""
+        # Build OU paths
         domain_parts = domain_fqdn.split('.')
-        ou_path = f"OU=Servers;DC={';DC='.join(domain_parts)}"
         
-        for vm in server_vms:
+        for vm in vms_to_join:
             # Skip if join_domain is explicitly set to false
             if not vm.get('join_domain', True):
                 continue
             
             count = vm.get('count', 1)
+            vm_type = vm.get('type')
+            
+            # Determine OU and extension type based on VM type
+            if vm_type == 'windows_desktop':
+                ou_path = f"OU=Workstations;DC={';DC='.join(domain_parts)}"
+                extension_type = 'workstation'
+                extension_name = 'SetUpWorkstation'
+            else:
+                ou_path = f"OU=Servers;DC={';DC='.join(domain_parts)}"
+                extension_type = 'server'
+                extension_name = 'SetUpServer'
             
             # Handle multiple instances
             for i in range(count):
@@ -2784,7 +2364,7 @@ class TemplateBuilder:
                 )
                 
                 # Step 1: Add unified prep extension (prep + security software)
-                prep_extension = self._build_unified_prep_extension(vm, instance_name, 'server')
+                prep_extension = self._build_unified_prep_extension(vm, instance_name, extension_type)
                 self.template["resources"].append(prep_extension)
                 
                 # Step 2: DSC extension for domain join
@@ -2794,7 +2374,7 @@ class TemplateBuilder:
                     "name": f"{instance_name}/JoinDomain",
                     "location": "[parameters('location')]",
                     "dependsOn": [
-                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', 'SetUpServer')]",
+                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', '{extension_name}')]",
                         "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
                     ],
                     "properties": {
@@ -2897,128 +2477,12 @@ class TemplateBuilder:
         Add security software deployment extensions (MDE, Sysmon, etc.).
         
         NOTE: Security software is now installed via unified prep extensions
-        for DCs and servers. This method handles workstations created via
-        nested deployment, which need separate extension handling.
+        for ALL VMs (DCs, servers, and workstations). This method is now
+        a no-op and can be removed in future cleanup.
         """
-        security_config = self.config.get('security_software', {})
-        
-        if not security_config:
-            return
-        
-        # Handle workstations (created via nested deployment)
-        # They need separate security software extensions since they're not
-        # created directly by us
-        self._add_workstation_security_software()
-        
-        # Future: Add other security software here
-        # mdi_config = security_config.get('mdi', {})
-        # if mdi_config.get('enabled'):
-        #     self._add_mdi_deployment(mdi_config)
-        
-        # sysmon_config = security_config.get('sysmon', {})
-        # if sysmon_config.get('enabled'):
-        #     self._add_sysmon_deployment(sysmon_config)
-    
-    def _add_workstation_security_software(self):
-        """
-        Add security software extensions for workstations.
-        
-        Workstations are created via nested Win10 template deployment,
-        so we need to add security software extensions separately.
-        """
-        security_config = self.config.get('security_software', {})
-        vms = self.config.get('virtual_machines', [])
-        
-        # Find workstation VMs
-        workstation_vms = [vm for vm in vms if vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop']
-        
-        if not workstation_vms:
-            return
-        
-        # Check MDE
-        mde_config = security_config.get('mde', {})
-        if mde_config.get('enabled'):
-            package_url = mde_config.get('onboarding_package_url')
-            if not package_url:
-                return
-            
-            targets_config = mde_config.get('targets', {})
-            install_after_domain_join = mde_config.get('install_after_domain_join', True)
-            
-            # Resolve which VMs to install MDE on
-            target_vms = self._resolve_software_targets(targets_config)
-            
-            # Filter to only workstations
-            target_workstations = [vm for vm in target_vms if vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller']
-            
-            if not target_workstations:
-                return
-            
-            # Get domain mode to determine dependencies
-            domain_mode = self._get_domain_mode()
-            ad_enabled = domain_mode in ['single', 'multi']
-            
-            # Deploy MDE to each target workstation
-            for vm in target_workstations:
-                count = vm.get('count', 1)
-                
-                # Handle multiple instances
-                for i in range(count):
-                    # Workstations use Win10 template naming
-                    vm_network = vm.get('network', {})
-                    private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
-                    ip_suffix = int(private_ip.split('.')[-1])
-                    suffix = vm.get('suffix', '')
-                    
-                    if suffix:
-                        instance_name = f"{suffix}{ip_suffix + i}"
-                    else:
-                        configured_name = vm.get('name', 'WORKSTATION')
-                        import re
-                        match = re.match(r'^(.+?)(\d+)$', configured_name)
-                        if match:
-                            instance_name = f"{match.group(1)}{int(match.group(2)) + i}"
-                        else:
-                            instance_name = f"{configured_name}{ip_suffix + i}"
-                    
-                    # Build dependencies
-                    dependencies = [
-                        "[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]"
-                    ]
-                    
-                    # If domain join is enabled and we should wait for it
-                    if ad_enabled and install_after_domain_join:
-                        if domain_mode == 'single':
-                            dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
-                        else:  # multi-domain
-                            # In multi-domain, we need to find which domain this workstation belongs to
-                            vm_domain = self._get_vm_domain(vm)
-                            domains = self.config.get('domains', [])
-                            domain = next((d for d in domains if d['name'] == vm_domain), None)
-                            if domain:
-                                domain_netbios = domain.get('netbios', self._derive_netbios(vm_domain))
-                                dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations-{domain_netbios}')]")
-                    
-                    # Create MDE onboarding extension
-                    mde_extension = {
-                        "type": "Microsoft.Compute/virtualMachines/extensions",
-                        "apiVersion": "2021-11-01",
-                        "name": f"{instance_name}/InstallMDE",
-                        "location": "[parameters('location')]",
-                        "dependsOn": dependencies,
-                        "properties": {
-                            "publisher": "Microsoft.Compute",
-                            "type": "CustomScriptExtension",
-                            "typeHandlerVersion": "1.8",
-                            "autoUpgradeMinorVersion": True,
-                            "settings": {
-                                "fileUris": [package_url],
-                                "commandToExecute": "powershell -ExecutionPolicy Unrestricted -command \"Expand-Archive -path WindowsDefenderATPOnboardingPackage.zip -DestinationPath WindowsDefenderATPOnboardingPackage; echo Y| cmd.exe /c 'WindowsDefenderATPOnboardingPackage\\\\WindowsDefenderATPLocalOnboardingScript.cmd'\""
-                            }
-                        }
-                    }
-                    
-                    self.template["resources"].append(mde_extension)
+        # All security software is now handled by unified prep extensions
+        # in _build_unified_prep_extension() which is called during VM setup
+        pass
     
     def _resolve_software_targets(self, targets_config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """

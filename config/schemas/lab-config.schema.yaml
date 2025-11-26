@@ -25,6 +25,11 @@ properties:
     type: string
     description: "Description of the lab environment"
     maxLength: 500
+  
+  append_random_suffix:
+    type: boolean
+    default: false
+    description: "Append a 3-character random string to all VM names (e.g., LABDC01-a3f). Useful for MDE to differentiate endpoints across deployments. Uses 3 chars to stay within Windows 15-character computer name limit."
 
   location:
     type: string
