@@ -1722,10 +1722,11 @@ class TemplateBuilder:
                 arm_event_logs = []
                 for log_config in windows_event_logs:
                     # Each event log source needs name, streams, and xPathQueries
-                    # Use Microsoft-Event for standard Event table (not Microsoft-WindowsEvent)
+                    # Use Microsoft-SecurityEvent for proper SecurityEvent table with field extraction
+                    # This enables Sentinel's Windows Security Events connector
                     event_log_source = {
                         "name": log_config.get('name', 'eventLogsDataSource'),
-                        "streams": log_config.get('streams', ['Microsoft-Event'])
+                        "streams": log_config.get('streams', ['Microsoft-SecurityEvent'])
                     }
                     
                     # Add xPathQueries if provided
@@ -1756,11 +1757,11 @@ class TemplateBuilder:
             # Add flow for Windows Event Logs
             if windows_event_logs:
                 for log_config in windows_event_logs:
+                    # Use Microsoft-SecurityEvent stream for proper SecurityEvent table
+                    streams = log_config.get('streams', ['Microsoft-SecurityEvent'])
                     data_flows.append({
-                        "streams": log_config.get('streams', ['Microsoft-Event']),
-                        "destinations": ["centralWorkspace"],
-                        "transformKql": "source",
-                        "outputStream": "Microsoft-Event"
+                        "streams": streams,
+                        "destinations": ["centralWorkspace"]
                     })
             
             # Add flow for Performance Counters

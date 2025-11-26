@@ -239,16 +239,113 @@ features:
       enable_sentinel: true
     
     data_collection_rules:
-      - name: "dcr-all-vms"
+      - name: "dcr-windows-security"
         data_sources:
           windows_event_logs:
-            - name: "securityLogs"
+            - name: "SecurityEvents"
+              streams:
+                - "Microsoft-SecurityEvent"
+              x_path_queries:
+                # AD Object Changes (5136, 5139)
+                - "Security!*[System[(EventID=5136 or EventID=5139)]]"
+                # AD Object Undelete (5137)
+                - "Security!*[System[(EventID=5137)]]"
+                # AD Object Delete (5141)
+                - "Security!*[System[(EventID=5141)]]"
+                # Directory Service Access (4662, 4661)
+                - "Security!*[System[(EventID=4662 or EventID=4661)]]"
+                # Kerberos Authentication (4768, 4769)
+                - "Security!*[System[(EventID=4768 or EventID=4769)]]"
+                # Process Creation (4688)
+                - "Security!*[System[(EventID=4688)]]"
+                # Object Deleted (4660)
+                - "Security!*[System[(EventID=4660)]]"
+                # File/SAM Access (4656, 4663, 4661)
+                - "Security!(*[System[EventID=4656]] and ((*[EventData[Data[@Name='ObjectType']='File']]))) or (*[System[EventID=4663]] and ((*[EventData[Data[@Name='ObjectType']='File']]))) or (*[System[EventID=4661]] and ((*[EventData[Data[@Name='ObjectType']='SAM']])))"
+                # Logon Events (4624, 4625, 4648, 4778, 4964)
+                - "Security!*[System[(EventID=4624 or EventID=4625 or EventID=4648 or EventID=4778 or EventID=4964)]]"
+                # Network Share Access (5140, 5145)
+                - "Security!*[System[(EventID=5140 or EventID=5145)]]"
+                # Filtering Platform Connection (5154, 5159, 5155, 5158, 5156, 5157, 5031)
+                - "Security!*[System[(EventID=5154 or EventID=5159 or EventID=5155 or EventID=5158 or EventID=5156 or EventID=5157 or EventID=5031)]]"
+                # Process Access (4656, 4663 for Process objects)
+                - "Security!(*[System[EventID=4656]] and ((*[EventData[Data[@Name='ObjectType']='Process']]))) or (*[System[EventID=4663]] and ((*[EventData[Data[@Name='ObjectType']='Process']])))"
+                # Process Termination (4689)
+                - "Security!*[System[(EventID=4689)]]"
+                # Scheduled Task Operations (4698, 4699, 4700, 4701, 4702)
+                - "Security!*[System[(EventID=4698 or EventID=4699 or EventID=4700 or EventID=4701 or EventID=4702)]]"
+                # Service Installation (4697)
+                - "Security!*[System[(EventID=4697)]]"
+                # User Account Changes (4720, 4722, 4725, 4726, 4717, 4740, 4738, 4781, 4767, 4718)
+                - "Security!*[System[(EventID=4720 or EventID=4722 or EventID=4725 or EventID=4726 or EventID=4717 or EventID=4740 or EventID=4738 or EventID=4781 or EventID=4767 or EventID=4718)]]"
+                # Object Access Auditing (4670, 4657)
+                - "Security!*[System[(EventID=4670 or EventID=4657)]]"
+                # Registry Access (4656, 4663 for Key objects)
+                - "Security!(*[System[EventID=4656]] and ((*[EventData[Data[@Name='ObjectType']='Key']]))) or (*[System[EventID=4663]] and ((*[EventData[Data[@Name='ObjectType']='Key']])))"
+                # Key Migration (5058, 5061)
+                - "Security!*[System[(EventID=5058 or EventID=5061)]]"
+
+            # System Event Log - Service Creation, System Changes, Crashes
+            - name: "SystemEvents"
               streams:
                 - "Microsoft-Event"
               x_path_queries:
-                - "Security!*[System[(band(Keywords,13510798882111488))]]"
-                - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
-
+                # ============================================
+                # PERSISTENCE & LATERAL MOVEMENT
+                # ============================================
+                
+                # Service Installed (7045) - Malicious service creation, PsExec
+                - "System!*[System[(EventID=7045)]]"
+                
+                # Service Started/Stopped (7036) - Track service execution and manipulation
+                - "System!*[System[(EventID=7036)]]"
+                
+                # Service Control Manager (7040) - Service config changes
+                - "System!*[System[(EventID=7040)]]"
+                
+                # ============================================
+                # SYSTEM INTEGRITY & CRASHES
+                # ============================================
+                
+                # System Startup (6005, 6009) - Reboot detection
+                - "System!*[System[(EventID=6005 or EventID=6009)]]"
+                
+                # System Shutdown (6006) - Unexpected shutdowns
+                - "System!*[System[(EventID=6006)]]"
+                
+                # Application Crash (1000, 1001) - Exploitation attempts
+                - "System!*[System[Provider[@Name='Application Error'] and (EventID=1000 or EventID=1001)]]"
+                
+                # Windows Error Reporting (1001) - Crash dumps
+                - "System!*[System[Provider[@Name='Windows Error Reporting'] and (EventID=1001)]]"
+                
+                # ============================================
+                # DRIVER & KERNEL CHANGES
+                # ============================================
+                
+                # Driver Loaded (7000, 7001, 7026) - Rootkit detection
+                - "System!*[System[(EventID=7000 or EventID=7001 or EventID=7026)]]"
+                
+                # Kernel Driver Signing (219) - Unsigned driver loaded
+                - "System!*[System[Provider[@Name='Microsoft-Windows-Kernel-PnP'] and (EventID=219)]]"
+                
+                # ============================================
+                # TIME MANIPULATION
+                # ============================================
+                
+                # System Time Changed (1) - Kerberos ticket manipulation
+                - "System!*[System[Provider[@Name='Microsoft-Windows-Kernel-General'] and (EventID=1)]]"
+                
+                # ============================================
+                # REMOTE CONNECTIONS
+                # ============================================
+                
+                # Remote Desktop Services (1149) - RDP connection established
+                - "System!*[System[Provider[@Name='Microsoft-Windows-TerminalServices-RemoteConnectionManager'] and (EventID=1149)]]"
+                
+                # RDP Session Reconnection (4624) - Session hijacking
+                - "System!*[System[Provider[@Name='Microsoft-Windows-TerminalServices-LocalSessionManager'] and (EventID=21, 22, 24, 25)]]"
+          
           performance_counters:
             - name: "BasicPerfCounters"
               streams:
@@ -258,6 +355,7 @@ features:
                 - "\\Processor(_Total)\\% Processor Time"
                 - "\\Memory\\Available MBytes"
                 - "\\LogicalDisk(_Total)\\% Free Space"
+        
         targets:
           types:
             - "windows_server"
