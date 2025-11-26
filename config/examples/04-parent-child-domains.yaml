@@ -1,28 +1,37 @@
-# Test Configuration: Parent-Child Domain
-# Purpose: Validate multi-domain schema and configuration
+# Blacksmith Lab Configuration - Level 4: Multi-Domain Forest
+# Scenario: Enterprise-scale multi-domain AD forest
+# Infrastructure: 2 DCs + 2 servers + 2 workstations + 1 attack VM (across 2 domains)
+# Purpose: Demonstrate parent-child domain configuration with cross-domain delegation
 
-name: "test-parent-child"
-description: "Test parent-child domain configuration for schema validation"
+name: "parent-child-domains-lab"
+description: "Multi-domain AD forest with parent-child relationship and cross-domain delegation"
 location: "eastus"
-resource_group: "rg-test-parent-child"
+resource_group: "rg-blacksmith-multi-domain"
+append_random_suffix: true
 
 # Network Configuration
 network:
   vnet_name: "vnet-test"
   address_space: "192.168.0.0/16"
   
-  # Global/shared subnets (optional)
+  # Global/shared subnets
   subnets:
     - name: "AzureBastionSubnet"
       address_prefix: "192.168.0.0/26"
+    - name: "snet-attack"
+      address_prefix: "192.168.3.0/24"
   
   remote_access:
     mode: "AzureBastionHost"
+    bastion:
+      enabled: true
+      subnet_prefix: "192.168.0.0/26"
 
 # Credentials
 credentials:
   admin_username: "labadmin"
-  admin_password: "TestPassword123!"
+  admin_password: "YourSecurePassword123!"
+  store_in_keyvault: true
 
 # Virtual Machines
 virtual_machines:
@@ -44,15 +53,36 @@ virtual_machines:
   
   # Corp servers
   - suffix: "web"
-    count: 1
+    count: 2
     type: "windows_server"
     size: "Standard_B2ms"
+    os:
+      sku: "2019-Datacenter"
   
   # Dev workstations
   - suffix: "dev"
-    count: 1
+    count: 2
     type: "windows_desktop"
     size: "Standard_B2ms"
+    os:
+      sku: "win10-22h2-pro"
+
+# Attack VM Configuration
+attack_vm:
+  enabled: true
+  name: "UBUNTU01"
+  type: "ubuntu"
+  size: "Standard_B2ms"
+  os:
+    publisher: "Canonical"
+    offer: "0001-com-ubuntu-server-jammy"
+    sku: "22_04-lts-gen2"
+    version: "latest"
+  network:
+    subnet: "snet-attack"
+    private_ip: "192.168.3.10"
+  tools:
+    - "nmap"
 
 # Multi-Domain Configuration
 domains:
@@ -81,6 +111,13 @@ domains:
         members: ["alice"]
         local_admin_on:
           - type: "windows_server"
+      
+      - name: "Cross-Domain Admins"
+        scope: "Global"
+        members: ["alice"]
+        local_admin_on:
+          - domain: "dev.corp.local"
+            type: "windows_desktop"
     
     # Corp domain users
     users:
@@ -90,7 +127,7 @@ domains:
         password: "CorpPass123!"
         department: "IT"
         job_title: "Administrator"
-        groups: ["Corp Admins"]
+        groups: ["Corp Admins", "Cross-Domain Admins"]
     
     # VMs that belong to corp domain
     endpoints:
@@ -139,8 +176,47 @@ domains:
       - "DC-DEV"
       - "dev"
 
-# Tags
-tags:
-  environment: "test"
-  purpose: "schema-validation"
-  project: "blacksmith-multi-domain"
+# Features
+features:
+  logging:
+    enabled: true
+    workspace:
+      name: "multi-domain-logs"
+      retention_days: 30
+      pricing_tier: "PerGB2018"
+      enable_sentinel: true
+    
+    data_collection_rules:
+      - name: "dcr-all-windows"
+        data_sources:
+          windows_event_logs:
+            - name: "securityLogs"
+              streams:
+                - "Microsoft-Event"
+              x_path_queries:
+                - "Security!*[System[(band(Keywords,13510798882111488))]]"
+                - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
+          performance_counters:
+            - name: "BasicPerfCounters"
+              streams:
+                - "Microsoft-Perf"
+              sampling_frequency_in_seconds: 60
+              counter_specifiers:
+                - "\\Processor(_Total)\\% Processor Time"
+                - "\\Memory\\Available MBytes"
+                - "\\LogicalDisk(_Total)\\% Free Space"
+        targets:
+          types:
+            - "windows_server"
+            - "windows_desktop"
+
+# Security Software Configuration
+security_software:
+  mde:
+    enabled: false
+    onboarding_package_url: "https://installers.blob.core.windows.net/installers/WindowsDefender.zip"
+    targets:
+      types:
+        - "windows_server"
+        - "windows_desktop"
+    install_after_domain_join: true

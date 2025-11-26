@@ -1,11 +1,13 @@
-# Blacksmith Lab Configuration
-# Scenario: Multiple Servers with Flexible Naming
-# Demonstrates the new suffix and naming_pattern features
+# Blacksmith Lab Configuration - Level 2: Multi-VM with Naming Patterns
+# Scenario: Learn VM scaling and naming patterns
+# Infrastructure: 1 DC + 3 servers + 2 workstations + 1 attack VM
+# Purpose: Demonstrate suffix/count and naming patterns with full security stack
 
-name: "multi-server-lab"
-description: "Lab demonstrating flexible VM naming with suffix and count parameters"
+name: "multi-vm-naming-lab"
+description: "Lab demonstrating VM scaling, naming patterns, and DCR targeting"
 location: "eastus"
-resource_group: "rg-blacksmith-naming-demo17"
+resource_group: "rg-blacksmith-naming-demo"
+append_random_suffix: true
 
 # Network Configuration
 network:
@@ -17,6 +19,8 @@ network:
       address_prefix: "192.168.1.0/24"
     - name: "snet-workstations"
       address_prefix: "192.168.2.0/24"
+    - name: "snet-attack"
+      address_prefix: "192.168.4.0/24"
   
   nsg:
     name: "nsg-lab"
@@ -40,6 +44,7 @@ network:
 credentials:
   admin_username: "labadmin"
   admin_password: "YourSecurePassword123!"
+  store_in_keyvault: true
 
 # Virtual Machines - Demonstrating different naming patterns
 virtual_machines:
@@ -90,9 +95,9 @@ virtual_machines:
       subnet: "snet-servers"
       ip_start: "192.168.1.30"
   
-  # Development Workstations - using suffix for workstations
+  # Development Workstations - using suffix for workstations (dev01, dev02)
   - suffix: "dev"
-    count: 1
+    count: 2
     naming_pattern: "suffix-number"
     type: "windows_desktop"
     size: "Standard_B2ms"
@@ -103,6 +108,23 @@ virtual_machines:
       ip_start: "192.168.2.10"
     depends_on:
       - "DC01"
+
+# Attack VM Configuration
+attack_vm:
+  enabled: false
+  name: "UBUNTU01"
+  type: "ubuntu"
+  size: "Standard_B2ms"
+  os:
+    publisher: "Canonical"
+    offer: "0001-com-ubuntu-server-jammy"
+    sku: "22_04-lts-gen2"
+    version: "latest"
+  network:
+    subnet: "snet-attack"
+    private_ip: "192.168.4.10"
+  tools:
+    - "nmap"
 
 # Active Directory Configuration
 active_directory:
@@ -118,6 +140,20 @@ active_directory:
       department: "IT"
       job_title: "Administrator"
       groups: ["Domain Admins"]
+    
+    - first_name: "John"
+      last_name: "Developer"
+      sam_account: "jdoe"
+      password: "ComplexP@ssw0rd456!"
+      department: "Development"
+      job_title: "Developer"
+    
+    - first_name: "Jane"
+      last_name: "Analyst"
+      sam_account: "jsmith"
+      password: "ComplexP@ssw0rd789!"
+      department: "IT"
+      job_title: "Security Analyst"
 
 # Features
 features:
@@ -128,6 +164,7 @@ features:
       name: "multi-server-logs"
       retention_days: 30
       pricing_tier: "PerGB2018"
+      enable_sentinel: true
     
     data_collection_rules:
       # DCR for all servers
@@ -140,11 +177,18 @@ features:
               x_path_queries:
                 - "Security!*[System[(band(Keywords,13510798882111488))]]"
                 - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
+          performance_counters:
+            - name: "BasicPerfCounters"
+              streams:
+                - "Microsoft-Perf"
+              sampling_frequency_in_seconds: 60
+              counter_specifiers:
+                - "\\Processor(_Total)\\% Processor Time"
+                - "\\Memory\\Available MBytes"
+                - "\\LogicalDisk(_Total)\\% Free Space"
         targets:
-          - "DC01"
-          - "web"
-          - "app"
-          - "db"
+          types:
+            - "windows_server"
       
       # DCR for workstations
       - name: "dcr-workstations"
@@ -156,11 +200,25 @@ features:
               x_path_queries:
                 - "Security!*[System[(band(Keywords,13510798882111488))]]"
                 - "Application!*[System[(Level=1 or Level=2)]]"
+          performance_counters:
+            - name: "BasicPerfCounters"
+              streams:
+                - "Microsoft-Perf"
+              sampling_frequency_in_seconds: 60
+              counter_specifiers:
+                - "\\Processor(_Total)\\% Processor Time"
+                - "\\Memory\\Available MBytes"
         targets:
-          - "dev"
+          types:
+            - "windows_desktop"
 
-# Tags
-tags:
-  environment: "lab"
-  scenario: "multi-server-naming"
-  project: "blacksmith"
+# Security Software Configuration
+security_software:
+  mde:
+    enabled: false
+    onboarding_package_url: "https://installers.blob.core.windows.net/installers/WindowsDefender.zip"
+    targets:
+      types:
+        - "windows_server"
+        - "windows_desktop"
+    install_after_domain_join: true

@@ -1,11 +1,13 @@
-# Blacksmith Lab Configuration
-# Scenario: AD Groups with Granular Local Admin Delegation
-# Demonstrates creating AD groups and assigning local admin rights based on VM type, role, suffix, or name
+# Blacksmith Lab Configuration - Level 3: AD Groups & Access Control
+# Scenario: Granular access control for attack path scenarios
+# Infrastructure: 1 DC + 4 servers + 4 workstations + 1 attack VM
+# Purpose: Demonstrate AD groups with local admin delegation (by type, suffix, specific VM)
 
-name: "ad-groups-admin-lab"
+name: "ad-groups-delegation-lab"
 description: "Lab demonstrating AD groups with granular local administrator delegation for attack path scenarios"
 location: "westus2"
-resource_group: "rg-blacksmith-admin-groups11"
+resource_group: "rg-blacksmith-admin-groups"
+append_random_suffix: true
 
 # Network Configuration
 network:
@@ -42,6 +44,7 @@ network:
 credentials:
   admin_username: "labadmin"
   admin_password: "YourSecurePassword123!"
+  store_in_keyvault: true
 
 # Virtual Machines
 virtual_machines:
@@ -58,7 +61,7 @@ virtual_machines:
   
   # Web Servers
   - suffix: "web"
-    count: 1
+    count: 2
     naming_pattern: "suffix-number"
     type: "windows_server"
     size: "Standard_B2ms"
@@ -70,7 +73,7 @@ virtual_machines:
   
   # Database Servers
   - suffix: "db"
-    count: 1
+    count: 2
     naming_pattern: "suffix-number"
     type: "windows_server"
     size: "Standard_B4ms"
@@ -82,7 +85,7 @@ virtual_machines:
   
   # Development Workstations
   - suffix: "dev"
-    count: 1
+    count: 2
     naming_pattern: "suffix-number"
     type: "windows_desktop"
     size: "Standard_B2ms"
@@ -91,10 +94,22 @@ virtual_machines:
     network:
       subnet: "snet-workstations"
       ip_start: "192.168.2.10"
+  
+  # QA Workstations
+  - suffix: "qa"
+    count: 2
+    naming_pattern: "suffix-number"
+    type: "windows_desktop"
+    size: "Standard_B2ms"
+    os:
+      sku: "win10-22h2-pro"
+    network:
+      subnet: "snet-workstations"
+      ip_start: "192.168.2.20"
 
 # Attack VM Configuration
 attack_vm:
-  enabled: true
+  enabled: false
   name: "UBUNTU01"
   type: "ubuntu"  # Using Ubuntu due to Azure Marketplace restrictions on Kali
   size: "Standard_B2ms"
@@ -221,6 +236,7 @@ features:
       name: "admin-groups-logs"
       retention_days: 30
       pricing_tier: "PerGB2018"
+      enable_sentinel: true
     
     data_collection_rules:
       - name: "dcr-all-vms"
@@ -233,9 +249,27 @@ features:
                 - "Security!*[System[(band(Keywords,13510798882111488))]]"
                 - "System!*[System[(Level=1 or Level=2 or Level=3)]]"
 
-# Tags
-tags:
-  environment: "lab"
-  scenario: "admin-delegation"
-  purpose: "attack-path-training"
-  project: "blacksmith"
+          performance_counters:
+            - name: "BasicPerfCounters"
+              streams:
+                - "Microsoft-Perf"
+              sampling_frequency_in_seconds: 60
+              counter_specifiers:
+                - "\\Processor(_Total)\\% Processor Time"
+                - "\\Memory\\Available MBytes"
+                - "\\LogicalDisk(_Total)\\% Free Space"
+        targets:
+          types:
+            - "windows_server"
+            - "windows_desktop"
+
+# Security Software Configuration
+security_software:
+  mde:
+    enabled: false
+    onboarding_package_url: "https://installers.blob.core.windows.net/installers/WindowsDefender.zip"
+    targets:
+      types:
+        - "windows_server"
+        - "windows_desktop"
+    install_after_domain_join: true

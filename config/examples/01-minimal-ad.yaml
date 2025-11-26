@@ -1,11 +1,13 @@
-# Blacksmith Lab Configuration
-# Scenario: Minimal Active Directory Lab
-# Simple setup with just a DC and one workstation
+# Blacksmith Lab Configuration - Level 1: Minimal AD Lab
+# Scenario: Quick start with all core features
+# Infrastructure: 1 DC + 1 workstation + 1 attack VM
+# Purpose: Get a working lab with all security features in minutes
 
 name: "minimal-ad-lab"
 description: "Minimal Active Directory lab with one DC and one workstation"
-location: "eastus"
-resource_group: "rg-blacksmith-minimal018"
+location: "westus2"
+resource_group: "rg-blacksmith-minimal032"
+append_random_suffix: true
 
 # Network Configuration
 network:
@@ -15,19 +17,9 @@ network:
   subnets:
     - name: "snet-default"
       address_prefix: "192.168.1.0/24"
-  
-  nsg:
-    name: "nsg-rdp-allow"
-    rules:
-      - name: "allow-rdp"
-        priority: 100
-        direction: "Inbound"
-        access: "Allow"
-        protocol: "Tcp"
-        source_port: "*"
-        destination_port: "3389"
-        source_address: "*"
-  
+    - name: "snet-attack"
+      address_prefix: "192.168.3.0/24"
+    
   remote_access:
     mode: "AzureBastionHost"
     bastion:
@@ -38,6 +30,7 @@ network:
 credentials:
   admin_username: "labadmin"
   admin_password: "YourSecurePassword123!"
+  store_in_keyvault: true  # Store password in Key Vault for easy Bastion access (no copy/paste!)
 
 # Virtual Machines
 virtual_machines:
@@ -52,7 +45,7 @@ virtual_machines:
       subnet: "snet-default"
       private_ip: "192.168.1.4"
   
-  - name: "WORKSTATION5"
+  - name: "WS5"
     type: "windows_desktop"
     size: "Standard_B2ms"
     os:
@@ -63,6 +56,23 @@ virtual_machines:
       private_ip: "192.168.1.5"
     depends_on:
       - "DC01"
+
+# Attack VM Configuration
+attack_vm:
+  enabled: true
+  name: "UBUNTU01"
+  type: "ubuntu"
+  size: "Standard_B2ms"
+  os:
+    publisher: "Canonical"
+    offer: "0001-com-ubuntu-server-jammy"
+    sku: "22_04-lts-gen2"
+    version: "latest"
+  network:
+    subnet: "snet-attack"
+    private_ip: "192.168.3.10"
+  tools:
+    - "nmap"
 
 # Active Directory Configuration
 active_directory:
@@ -81,12 +91,7 @@ active_directory:
 
 # Features
 features:
-  sysmon:
-    enabled: false
-  
-  aad_connect:
-    enabled: false
-  
+
   # Logging Configuration
   logging:
     enabled: true
@@ -117,11 +122,18 @@ features:
                 - "\\Memory\\Available MBytes"
                 - "\\LogicalDisk(_Total)\\% Free Space"
         targets:
-          - "DC01"
-          - "WORKSTATION5"
+          types:
+            - "windows_server"
+            - "windows_desktop"
 
-# Tags
-tags:
-  environment: "lab"
-  scenario: "minimal-ad"
-  project: "blacksmith"
+# Security Software Configuration
+security_software:
+  # Microsoft Defender for Endpoint
+  mde:
+    enabled: false
+    onboarding_package_url: "https://installers.blob.core.windows.net/installers/WindowsDefender.zip"
+    targets:
+      types:
+        - "windows_server"
+        - "windows_desktop"
+    install_after_domain_join: true

@@ -688,7 +688,9 @@ class TemplateBuilder:
         else:  # ubuntu
             # Ubuntu needs more tools installed
             install_commands.append("export DEBIAN_FRONTEND=noninteractive")
-            install_commands.append("apt-get update")
+            # Use apt-get update with || true to ignore command-not-found database errors
+            # This is a known Ubuntu issue where the cnf-update-db post-invoke script can fail
+            install_commands.append("apt-get update || true")
             # Use python3-pip from universe repository (already enabled in Ubuntu 22.04)
             install_commands.append("apt-get install -y python3 python3-pip git curl wget unzip")
             
