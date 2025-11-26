@@ -552,10 +552,31 @@ properties:
                       type: boolean
                       default: false
                 targets:
-                  type: array
-                  items:
-                    type: string
-                  description: "VM names to apply DCR to (empty means all VMs)"
+                  type: object
+                  description: "Target VM selection for DCR deployment (if not specified, applies to all VMs)"
+                  properties:
+                    include:
+                      type: array
+                      items:
+                        type: string
+                      description: "VM names or suffixes to include (if specified, only these VMs get this DCR)"
+                    exclude:
+                      type: array
+                      items:
+                        type: string
+                      description: "VM names or suffixes to exclude (if specified, all VMs except these get this DCR)"
+                    types:
+                      type: array
+                      items:
+                        type: string
+                        enum: [windows_server, windows_desktop, linux]
+                      description: "Apply DCR to all VMs of these types"
+                    roles:
+                      type: array
+                      items:
+                        type: string
+                        enum: [domain_controller, adfs, wec, exchange, generic]
+                      description: "Apply DCR to all VMs with these roles"
 
   # Multi-Domain Configuration (new)
   domains:

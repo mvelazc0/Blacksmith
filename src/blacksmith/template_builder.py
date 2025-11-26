@@ -1725,17 +1725,17 @@ class TemplateBuilder:
         # Collect all target VMs across all DCRs
         for dcr_info in dcr_ids:
             dcr_name = dcr_info['name']
-            dcr_targets = dcr_info['targets']
+            dcr_targets_config = dcr_info['targets']
+            
+            # Resolve which VMs should get this DCR using the same targeting logic as MDE
+            target_vms = self._resolve_software_targets(dcr_targets_config)
             
             # Determine which VMs to install agents on and expand for multiple instances
             vm_instances = []
             has_workstations = False
-            for vm in vms:
+            for vm in target_vms:
                 # Check if this VM should have the agent installed
-                # Use suffix if available, otherwise use name
                 vm_identifier = vm.get('suffix') or vm.get('name')
-                if dcr_targets and vm_identifier not in dcr_targets:
-                    continue
                 
                 # Track if we're targeting workstations
                 is_workstation = vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller'
@@ -1816,14 +1816,10 @@ class TemplateBuilder:
         # Create DCR associations for each DCR
         for dcr_info in dcr_ids:
             dcr_name = dcr_info['name']
-            dcr_targets = dcr_info['targets']
+            dcr_targets_config = dcr_info['targets']
             
-            # Determine which VMs to associate
-            if not dcr_targets:
-                target_vms = vms
-            else:
-                # Check both suffix and name for matching
-                target_vms = [vm for vm in vms if (vm.get('suffix') or vm.get('name')) in dcr_targets]
+            # Resolve which VMs should get this DCR using the same targeting logic as MDE
+            target_vms = self._resolve_software_targets(dcr_targets_config)
             
             if not target_vms:
                 continue
