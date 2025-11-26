@@ -897,5 +897,126 @@ properties:
     additionalProperties:
       type: string
     description: "Azure resource tags"
+  
+  # Security Software Configuration
+  security_software:
+    type: object
+    description: "Security software deployment configuration"
+    properties:
+      # Microsoft Defender for Endpoint
+      mde:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+            default: false
+            description: "Enable MDE deployment"
+          onboarding_package_url:
+            type: string
+            format: uri
+            description: "SAS URL to MDE onboarding package ZIP file"
+          targets:
+            type: object
+            description: "Target VM selection for MDE deployment"
+            properties:
+              include:
+                type: array
+                items:
+                  type: string
+                description: "VM names or suffixes to include (if specified, only these VMs get MDE)"
+              exclude:
+                type: array
+                items:
+                  type: string
+                description: "VM names or suffixes to exclude (if specified, all VMs except these get MDE)"
+              types:
+                type: array
+                items:
+                  type: string
+                  enum: [windows_server, windows_desktop, linux]
+                description: "Install on all VMs of these types"
+              roles:
+                type: array
+                items:
+                  type: string
+                  enum: [domain_controller, adfs, wec, exchange, generic]
+                description: "Install on all VMs with these roles"
+          install_after_domain_join:
+            type: boolean
+            default: true
+            description: "Wait for domain join before installing MDE"
+      
+      # Microsoft Defender for Identity (Future)
+      mdi:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+            default: false
+          sensor_package_url:
+            type: string
+            format: uri
+          access_key:
+            type: string
+          targets:
+            type: object
+            properties:
+              include:
+                type: array
+                items:
+                  type: string
+              exclude:
+                type: array
+                items:
+                  type: string
+              types:
+                type: array
+                items:
+                  type: string
+                  enum: [windows_server, windows_desktop, linux]
+              roles:
+                type: array
+                items:
+                  type: string
+                  enum: [domain_controller, adfs, wec, exchange, generic]
+          install_after_domain_join:
+            type: boolean
+            default: true
+      
+      # Sysmon (Future)
+      sysmon:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+            default: false
+          config_url:
+            type: string
+            format: uri
+            default: "https://raw.githubusercontent.com/OTRF/Blacksmith/master/resources/configs/sysmon/sysmon.xml"
+          targets:
+            type: object
+            properties:
+              include:
+                type: array
+                items:
+                  type: string
+              exclude:
+                type: array
+                items:
+                  type: string
+              types:
+                type: array
+                items:
+                  type: string
+                  enum: [windows_server, windows_desktop, linux]
+              roles:
+                type: array
+                items:
+                  type: string
+                  enum: [domain_controller, adfs, wec, exchange, generic]
+          install_after_domain_join:
+            type: boolean
+            default: true
 
 additionalProperties: false

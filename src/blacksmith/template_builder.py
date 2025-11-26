@@ -175,6 +175,9 @@ class TemplateBuilder:
         # Add outputs
         self._add_outputs()
         
+        # Add security software (MDE, etc.) - after domain join
+        self._add_security_software_resources()
+        
         return self.template
     
     def _add_parameters(self):
@@ -979,15 +982,78 @@ class TemplateBuilder:
             }
         }
     
-    def _add_dc_prep_extension(self, dc_name: str):
-        """Add Custom Script Extension to prepare DC (install DSC modules)."""
-        prep_extension = {
+    def _build_unified_prep_extension(self, vm_config: Dict[str, Any], instance_name: str, vm_type: str) -> Dict[str, Any]:
+        """
+        Build unified CustomScriptExtension that combines prep scripts + security software.
+        
+        This solves the Azure limitation of 1 CustomScriptExtension per VM by combining:
+        - Prep scripts (DSC modules, initial settings, auditing)
+        - Security software (MDE, Sysmon, MDI, etc.)
+        
+        Args:
+            vm_config: VM configuration dictionary
+            instance_name: Actual VM instance name
+            vm_type: Type of VM ('dc', 'server', 'workstation')
+            
+        Returns:
+            CustomScriptExtension resource dictionary
+        """
+        # Base prep scripts (always included)
+        file_uris = [
+            "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
+            "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
+            "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
+            "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
+            "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
+            "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1"
+        ]
+        
+        # Add auditing scripts for DCs
+        if vm_type == 'dc':
+            file_uris.extend([
+                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-WinAuditCategories.ps1",
+                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-PowerShell-Logging.ps1",
+                "https://raw.githubusercontent.com/OTRF/Set-AuditRule/master/Set-AuditRule.ps1",
+                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Set-SACLs.ps1",
+                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Set-WallPaper.ps1"
+            ])
+        
+        # Get security software for this VM
+        security_software = self._get_security_software_for_vm(vm_config, instance_name)
+        
+        # Add security software file URIs
+        for software in security_software:
+            if software['type'] == 'mde':
+                file_uris.append(software['package_url'])
+        
+        # Build command to execute
+        commands = []
+        
+        # Step 1: Run prep scripts
+        if vm_type == 'dc':
+            commands.append("powershell -ExecutionPolicy Unrestricted -File ./Set-Initial-Settings.ps1 -SetupType DC")
+        else:
+            commands.append("powershell -ExecutionPolicy Unrestricted -File ./Install-DSC-Modules.ps1")
+        
+        # Step 2: Install security software
+        for software in security_software:
+            if software['type'] == 'mde':
+                commands.append("powershell -ExecutionPolicy Unrestricted -command \"Expand-Archive -path WindowsDefenderATPOnboardingPackage.zip -DestinationPath WindowsDefenderATPOnboardingPackage; echo Y| cmd.exe /c 'WindowsDefenderATPOnboardingPackage\\\\WindowsDefenderATPLocalOnboardingScript.cmd'\"")
+        
+        # Combine commands with && separator
+        command_to_execute = " && ".join(commands)
+        
+        # Determine extension name based on VM type
+        extension_name = "SetUpDC" if vm_type == 'dc' else "SetUpServer"
+        
+        # Build extension resource
+        extension = {
             "type": "Microsoft.Compute/virtualMachines/extensions",
             "apiVersion": "2021-11-01",
-            "name": f"{dc_name}/SetUpDC",
+            "name": f"{instance_name}/{extension_name}",
             "location": "[parameters('location')]",
             "dependsOn": [
-                f"[resourceId('Microsoft.Compute/virtualMachines', '{dc_name}')]"
+                f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]"
             ],
             "properties": {
                 "publisher": "Microsoft.Compute",
@@ -995,25 +1061,63 @@ class TemplateBuilder:
                 "typeHandlerVersion": "1.8",
                 "autoUpgradeMinorVersion": True,
                 "settings": {
-                    "fileUris": [
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-WinAuditCategories.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Enable-PowerShell-Logging.ps1",
-                        "https://raw.githubusercontent.com/OTRF/Set-AuditRule/master/Set-AuditRule.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/auditing/Set-SACLs.ps1",
-                        "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Set-WallPaper.ps1"
-                    ],
-                    "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Set-Initial-Settings.ps1 -SetupType DC"
+                    "fileUris": file_uris,
+                    "commandToExecute": command_to_execute
                 },
                 "protectedSettings": {}
             }
         }
         
+        return extension
+    
+    def _get_security_software_for_vm(self, vm_config: Dict[str, Any], instance_name: str) -> List[Dict[str, Any]]:
+        """
+        Determine which security software should be installed on this VM.
+        
+        Args:
+            vm_config: VM configuration dictionary
+            instance_name: Actual VM instance name
+            
+        Returns:
+            List of security software configurations to install
+        """
+        software_list = []
+        security_config = self.config.get('security_software', {})
+        
+        if not security_config:
+            return software_list
+        
+        # Check MDE
+        mde_config = security_config.get('mde', {})
+        if mde_config.get('enabled'):
+            package_url = mde_config.get('onboarding_package_url')
+            if package_url:
+                targets_config = mde_config.get('targets', {})
+                target_vms = self._resolve_software_targets(targets_config)
+                
+                # Check if this VM is in the target list
+                if any((vm.get('suffix') or vm.get('name')) == (vm_config.get('suffix') or vm_config.get('name')) for vm in target_vms):
+                    software_list.append({
+                        'type': 'mde',
+                        'package_url': package_url
+                    })
+        
+        # Future: Add other security software here
+        # MDI, Sysmon, etc.
+        
+        return software_list
+    
+    def _add_dc_prep_extension(self, dc_name: str):
+        """Add unified CustomScriptExtension to prepare DC (prep + security software)."""
+        # Find the DC VM configuration
+        vms = self.config.get('virtual_machines', [])
+        dc_vm = next((vm for vm in vms if vm.get('role') == 'domain_controller'), None)
+        
+        if not dc_vm:
+            return
+        
+        # Build unified extension
+        prep_extension = self._build_unified_prep_extension(dc_vm, dc_name, 'dc')
         self.template["resources"].append(prep_extension)
     
     def _add_workstation_prep_extensions(self):
@@ -1541,34 +1645,8 @@ class TemplateBuilder:
                 # Determine which groups should be local admins on THIS SPECIFIC VM instance
                 local_admin_groups = self._get_local_admin_groups_for_vm(vm, instance_name)
                 
-                # Step 1: Add prep extension to install DSC modules (same as DC prep)
-                prep_extension = {
-                    "type": "Microsoft.Compute/virtualMachines/extensions",
-                    "apiVersion": "2021-11-01",
-                    "name": f"{instance_name}/SetUpServer",
-                    "location": "[parameters('location')]",
-                    "dependsOn": [
-                        f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]"
-                    ],
-                    "properties": {
-                        "publisher": "Microsoft.Compute",
-                        "type": "CustomScriptExtension",
-                        "typeHandlerVersion": "1.8",
-                        "autoUpgradeMinorVersion": True,
-                        "settings": {
-                            "fileUris": [
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1"
-                            ],
-                            "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Install-DSC-Modules.ps1"
-                        },
-                        "protectedSettings": {}
-                    }
-                }
+                # Step 1: Add unified prep extension (prep + security software)
+                prep_extension = self._build_unified_prep_extension(vm, instance_name, 'server')
                 self.template["resources"].append(prep_extension)
                 
                 # Step 2: DSC extension for domain join (depends on prep)
@@ -2705,34 +2783,8 @@ class TemplateBuilder:
                     vm, domain_fqdn, instance_name
                 )
                 
-                # Step 1: Add prep extension to install DSC modules
-                prep_extension = {
-                    "type": "Microsoft.Compute/virtualMachines/extensions",
-                    "apiVersion": "2021-11-01",
-                    "name": f"{instance_name}/SetUpServer",
-                    "location": "[parameters('location')]",
-                    "dependsOn": [
-                        f"[resourceId('Microsoft.Compute/virtualMachines', '{instance_name}')]"
-                    ],
-                    "properties": {
-                        "publisher": "Microsoft.Compute",
-                        "type": "CustomScriptExtension",
-                        "typeHandlerVersion": "1.8",
-                        "autoUpgradeMinorVersion": True,
-                        "settings": {
-                            "fileUris": [
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Set-Initial-Settings.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/templates/azure/Win10-AD-WEC/scripts/Install-DSC-Modules.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Prepare-Box.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Box.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Disarm-Firewall.ps1",
-                                "https://raw.githubusercontent.com/mvelazc0/Blacksmith/refs/heads/master/resources/scripts/powershell/misc/Configure-PSRemoting.ps1"
-                            ],
-                            "commandToExecute": "powershell -ExecutionPolicy Unrestricted -File ./Install-DSC-Modules.ps1"
-                        },
-                        "protectedSettings": {}
-                    }
-                }
+                # Step 1: Add unified prep extension (prep + security software)
+                prep_extension = self._build_unified_prep_extension(vm, instance_name, 'server')
                 self.template["resources"].append(prep_extension)
                 
                 # Step 2: DSC extension for domain join
@@ -2839,3 +2891,184 @@ class TemplateBuilder:
                         break  # Don't add same group multiple times
         
         return local_admin_groups
+    
+    def _add_security_software_resources(self):
+        """
+        Add security software deployment extensions (MDE, Sysmon, etc.).
+        
+        NOTE: Security software is now installed via unified prep extensions
+        for DCs and servers. This method handles workstations created via
+        nested deployment, which need separate extension handling.
+        """
+        security_config = self.config.get('security_software', {})
+        
+        if not security_config:
+            return
+        
+        # Handle workstations (created via nested deployment)
+        # They need separate security software extensions since they're not
+        # created directly by us
+        self._add_workstation_security_software()
+        
+        # Future: Add other security software here
+        # mdi_config = security_config.get('mdi', {})
+        # if mdi_config.get('enabled'):
+        #     self._add_mdi_deployment(mdi_config)
+        
+        # sysmon_config = security_config.get('sysmon', {})
+        # if sysmon_config.get('enabled'):
+        #     self._add_sysmon_deployment(sysmon_config)
+    
+    def _add_workstation_security_software(self):
+        """
+        Add security software extensions for workstations.
+        
+        Workstations are created via nested Win10 template deployment,
+        so we need to add security software extensions separately.
+        """
+        security_config = self.config.get('security_software', {})
+        vms = self.config.get('virtual_machines', [])
+        
+        # Find workstation VMs
+        workstation_vms = [vm for vm in vms if vm.get('role') != 'domain_controller' and vm.get('type') == 'windows_desktop']
+        
+        if not workstation_vms:
+            return
+        
+        # Check MDE
+        mde_config = security_config.get('mde', {})
+        if mde_config.get('enabled'):
+            package_url = mde_config.get('onboarding_package_url')
+            if not package_url:
+                return
+            
+            targets_config = mde_config.get('targets', {})
+            install_after_domain_join = mde_config.get('install_after_domain_join', True)
+            
+            # Resolve which VMs to install MDE on
+            target_vms = self._resolve_software_targets(targets_config)
+            
+            # Filter to only workstations
+            target_workstations = [vm for vm in target_vms if vm.get('type') == 'windows_desktop' and vm.get('role') != 'domain_controller']
+            
+            if not target_workstations:
+                return
+            
+            # Get domain mode to determine dependencies
+            domain_mode = self._get_domain_mode()
+            ad_enabled = domain_mode in ['single', 'multi']
+            
+            # Deploy MDE to each target workstation
+            for vm in target_workstations:
+                count = vm.get('count', 1)
+                
+                # Handle multiple instances
+                for i in range(count):
+                    # Workstations use Win10 template naming
+                    vm_network = vm.get('network', {})
+                    private_ip = vm_network.get('ip_start') or vm_network.get('private_ip', '192.168.1.5')
+                    ip_suffix = int(private_ip.split('.')[-1])
+                    suffix = vm.get('suffix', '')
+                    
+                    if suffix:
+                        instance_name = f"{suffix}{ip_suffix + i}"
+                    else:
+                        configured_name = vm.get('name', 'WORKSTATION')
+                        import re
+                        match = re.match(r'^(.+?)(\d+)$', configured_name)
+                        if match:
+                            instance_name = f"{match.group(1)}{int(match.group(2)) + i}"
+                        else:
+                            instance_name = f"{configured_name}{ip_suffix + i}"
+                    
+                    # Build dependencies
+                    dependencies = [
+                        "[resourceId('Microsoft.Resources/deployments', 'deployWorkstations')]"
+                    ]
+                    
+                    # If domain join is enabled and we should wait for it
+                    if ad_enabled and install_after_domain_join:
+                        if domain_mode == 'single':
+                            dependencies.append("[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations')]")
+                        else:  # multi-domain
+                            # In multi-domain, we need to find which domain this workstation belongs to
+                            vm_domain = self._get_vm_domain(vm)
+                            domains = self.config.get('domains', [])
+                            domain = next((d for d in domains if d['name'] == vm_domain), None)
+                            if domain:
+                                domain_netbios = domain.get('netbios', self._derive_netbios(vm_domain))
+                                dependencies.append(f"[resourceId('Microsoft.Resources/deployments', 'JoinWorkstations-{domain_netbios}')]")
+                    
+                    # Create MDE onboarding extension
+                    mde_extension = {
+                        "type": "Microsoft.Compute/virtualMachines/extensions",
+                        "apiVersion": "2021-11-01",
+                        "name": f"{instance_name}/InstallMDE",
+                        "location": "[parameters('location')]",
+                        "dependsOn": dependencies,
+                        "properties": {
+                            "publisher": "Microsoft.Compute",
+                            "type": "CustomScriptExtension",
+                            "typeHandlerVersion": "1.8",
+                            "autoUpgradeMinorVersion": True,
+                            "settings": {
+                                "fileUris": [package_url],
+                                "commandToExecute": "powershell -ExecutionPolicy Unrestricted -command \"Expand-Archive -path WindowsDefenderATPOnboardingPackage.zip -DestinationPath WindowsDefenderATPOnboardingPackage; echo Y| cmd.exe /c 'WindowsDefenderATPOnboardingPackage\\\\WindowsDefenderATPLocalOnboardingScript.cmd'\""
+                            }
+                        }
+                    }
+                    
+                    self.template["resources"].append(mde_extension)
+    
+    def _resolve_software_targets(self, targets_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Resolve which VMs should have software installed based on targeting rules.
+        
+        Args:
+            targets_config: Targeting configuration (include, exclude, types, roles)
+            
+        Returns:
+            List of VM configurations that match the targeting rules
+        """
+        vms = self.config.get('virtual_machines', [])
+        
+        # If no targeting specified, return all VMs
+        if not targets_config:
+            return vms
+        
+        include_list = targets_config.get('include', [])
+        exclude_list = targets_config.get('exclude', [])
+        types_list = targets_config.get('types', [])
+        roles_list = targets_config.get('roles', [])
+        
+        # Priority 1: If include is specified, only return those VMs
+        if include_list:
+            return [
+                vm for vm in vms
+                if (vm.get('suffix') or vm.get('name')) in include_list
+            ]
+        
+        # Priority 2: If exclude is specified, return all except those
+        if exclude_list:
+            return [
+                vm for vm in vms
+                if (vm.get('suffix') or vm.get('name')) not in exclude_list
+            ]
+        
+        # Priority 3: If types is specified, return VMs of those types
+        if types_list:
+            return [
+                vm for vm in vms
+                if vm.get('type') in types_list
+            ]
+        
+        # Priority 4: If roles is specified, return VMs with those roles
+        if roles_list:
+            return [
+                vm for vm in vms
+                if vm.get('role') in roles_list
+            ]
+        
+        # Default: return all VMs
+        return vms
+    

@@ -110,6 +110,7 @@ class ConfigValidator:
         self._validate_dependencies(config)
         self._validate_active_directory(config)
         self._validate_services(config)
+        self._validate_security_software(config)
         self._validate_ip_addresses(config)
         
         # Multi-domain validation (if domains are defined)
@@ -298,6 +299,143 @@ class ConfigValidator:
                 self.errors.append(
                     f"Exchange server '{exchange_server}' not found in VM definitions"
                 )
+    def _validate_security_software(self, config: Dict[str, Any]):
+        """Validate security software configurations."""
+        security_config = config.get('security_software', {})
+        
+        if not security_config:
+            return
+        
+        vms = config.get('virtual_machines', [])
+        vm_identifiers = {vm.get('suffix') or vm.get('name') for vm in vms}
+        vm_roles = {(vm.get('suffix') or vm.get('name')): vm.get('role') for vm in vms}
+        vm_types = {(vm.get('suffix') or vm.get('name')): vm.get('type') for vm in vms}
+        
+        # Validate MDE configuration
+        mde_config = security_config.get('mde', {})
+        if mde_config.get('enabled', False):
+            # Check onboarding package URL is provided
+            package_url = mde_config.get('onboarding_package_url')
+            if not package_url:
+                self.errors.append(
+                    "MDE is enabled but 'onboarding_package_url' is not provided"
+                )
+            elif package_url:
+                # Validate URL format
+                if not self._is_valid_url(package_url):
+                    self.errors.append(
+                        f"Invalid MDE onboarding package URL format: {package_url}"
+                    )
+            
+            # Validate targets configuration
+            targets_config = mde_config.get('targets', {})
+            if targets_config:
+                # Validate include list
+                include_list = targets_config.get('include', [])
+                for target in include_list:
+                    if target not in vm_identifiers:
+                        self.errors.append(
+                            f"MDE target VM '{target}' in include list not found in VM definitions"
+                        )
+                
+                # Validate exclude list
+                exclude_list = targets_config.get('exclude', [])
+                for target in exclude_list:
+                    if target not in vm_identifiers:
+                        self.errors.append(
+                            f"MDE target VM '{target}' in exclude list not found in VM definitions"
+                        )
+                
+                # Check for conflicts (VM in both include and exclude)
+                conflicts = set(include_list) & set(exclude_list)
+                if conflicts:
+                    self.errors.append(
+                        f"MDE targeting conflict: VMs in both include and exclude lists: {', '.join(conflicts)}"
+                    )
+                
+                # Validate types
+                valid_types = ['domain_controller', 'member_server', 'workstation']
+                include_types = targets_config.get('include_types', [])
+                for vm_type in include_types:
+                    if vm_type not in valid_types:
+                        self.errors.append(
+                            f"Invalid MDE target type '{vm_type}'. Valid types: {', '.join(valid_types)}"
+                        )
+                
+                exclude_types = targets_config.get('exclude_types', [])
+                for vm_type in exclude_types:
+                    if vm_type not in valid_types:
+                        self.errors.append(
+                            f"Invalid MDE target type '{vm_type}'. Valid types: {', '.join(valid_types)}"
+                        )
+                
+                # Check for type conflicts
+                type_conflicts = set(include_types) & set(exclude_types)
+                if type_conflicts:
+                    self.errors.append(
+                        f"MDE targeting conflict: Types in both include and exclude: {', '.join(type_conflicts)}"
+                    )
+                
+                # Validate roles
+                valid_roles = ['domain_controller', 'member_server', 'workstation', 'adfs', 'wec', 'exchange']
+                include_roles = targets_config.get('include_roles', [])
+                for role in include_roles:
+                    if role not in valid_roles:
+                        self.errors.append(
+                            f"Invalid MDE target role '{role}'. Valid roles: {', '.join(valid_roles)}"
+                        )
+                
+                exclude_roles = targets_config.get('exclude_roles', [])
+                for role in exclude_roles:
+                    if role not in valid_roles:
+                        self.errors.append(
+                            f"Invalid MDE target role '{role}'. Valid roles: {', '.join(valid_roles)}"
+                        )
+                
+                # Check for role conflicts
+                role_conflicts = set(include_roles) & set(exclude_roles)
+                if role_conflicts:
+                    self.errors.append(
+                        f"MDE targeting conflict: Roles in both include and exclude: {', '.join(role_conflicts)}"
+                    )
+                
+                # Validate name patterns
+                include_names = targets_config.get('include_names', [])
+                exclude_names = targets_config.get('exclude_names', [])
+                
+                # Check for name pattern conflicts
+                name_conflicts = set(include_names) & set(exclude_names)
+                if name_conflicts:
+                    self.errors.append(
+                        f"MDE targeting conflict: Name patterns in both include and exclude: {', '.join(name_conflicts)}"
+                    )
+                
+                # Warn if no targets will be selected
+                if not any([include_list, include_types, include_roles, include_names]):
+                    # If no include filters, all VMs are targeted (unless excluded)
+                    if exclude_list or exclude_types or exclude_roles or exclude_names:
+                        # Some VMs will be excluded, which is fine
+                        pass
+                    else:
+                        # No filters at all - all VMs will get MDE
+                        self.warnings.append(
+                            "MDE has no targeting filters - will be deployed to all VMs"
+                        )
+    
+    def _is_valid_url(self, url: str) -> bool:
+        """Validate URL format."""
+        if not url:
+            return False
+        # Basic URL validation
+        url_pattern = re.compile(
+            r'^https?://'  # http:// or https://
+            r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain...
+            r'localhost|'  # localhost...
+            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
+            r'(?::\d+)?'  # optional port
+            r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        return url_pattern.match(url) is not None
+    
     
     def _validate_ip_addresses(self, config: Dict[str, Any]):
         """Validate IP address assignments."""
