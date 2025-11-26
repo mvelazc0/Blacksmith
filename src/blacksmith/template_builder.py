@@ -168,6 +168,9 @@ class TemplateBuilder:
         # Add network resources
         self._add_network_resources()
         
+        # Add Key Vault (if enabled)
+        self._add_keyvault_resource()
+        
         # Add compute resources
         self._add_compute_resources()
         
@@ -369,6 +372,67 @@ class TemplateBuilder:
             resources.extend(bastion_resources)
         
         self.template["resources"].extend(resources)
+    
+    def _add_keyvault_resource(self):
+        """
+        Add Azure Key Vault to store admin password for easy Bastion access.
+        
+        Creates a Key Vault with the admin password stored as a secret,
+        eliminating the need to copy/paste passwords when using Azure Bastion.
+        """
+        creds = self.config.get('credentials', {})
+        
+        if not creds.get('store_in_keyvault', False):
+            return
+        
+        # Generate unique Key Vault name (3-24 chars, alphanumeric + hyphens)
+        # Format: kv-{lab-name}-{unique-suffix}
+        lab_name = self.config.get('name', 'lab')[:10]  # Max 10 chars from lab name
+        # Remove any characters that aren't alphanumeric or hyphens
+        lab_name = ''.join(c if c.isalnum() or c == '-' else '' for c in lab_name)
+        
+        # Key Vault resource
+        keyvault = {
+            "type": "Microsoft.KeyVault/vaults",
+            "apiVersion": "2023-07-01",
+            "name": f"[substring(concat('kv-{lab_name}-', uniqueString(resourceGroup().id)), 0, 24)]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "sku": {
+                    "family": "A",
+                    "name": "standard"
+                },
+                "tenantId": "[subscription().tenantId]",
+                "enableRbacAuthorization": True,  # Use Azure RBAC instead of access policies
+                "enabledForDeployment": False,
+                "enabledForTemplateDeployment": False,
+                "enabledForDiskEncryption": False,
+                "enableSoftDelete": True,
+                "softDeleteRetentionInDays": 7,  # Minimum for labs
+                "publicNetworkAccess": "Enabled"  # Allow access from Bastion
+            }
+        }
+        
+        self.template["resources"].append(keyvault)
+        
+        # Secret with admin password
+        secret = {
+            "type": "Microsoft.KeyVault/vaults/secrets",
+            "apiVersion": "2023-07-01",
+            "name": f"[concat(substring(concat('kv-{lab_name}-', uniqueString(resourceGroup().id)), 0, 24), '/admin-password')]",
+            "dependsOn": [
+                f"[resourceId('Microsoft.KeyVault/vaults', substring(concat('kv-{lab_name}-', uniqueString(resourceGroup().id)), 0, 24))]"
+            ],
+            "properties": {
+                "value": "[parameters('adminPassword')]",
+                "contentType": "text/plain",
+                "attributes": {
+                    "enabled": True
+                }
+            }
+        }
+        
+        self.template["resources"].append(secret)
     
     def _generate_vm_name(self, vm: Dict[str, Any], index: int) -> str:
         """
@@ -987,6 +1051,35 @@ class TemplateBuilder:
                 "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
             }
         }
+        
+        # Add Key Vault outputs if enabled
+        creds = self.config.get('credentials', {})
+        if creds.get('store_in_keyvault', False):
+            lab_name = self.config.get('name', 'lab')[:10]
+            # Remove any characters that aren't alphanumeric or hyphens
+            lab_name = ''.join(c if c.isalnum() or c == '-' else '' for c in lab_name)
+            
+            self.template["outputs"]["keyVaultName"] = {
+                "type": "string",
+                "value": f"[substring(concat('kv-{lab_name}-', uniqueString(resourceGroup().id)), 0, 24)]",
+                "metadata": {
+                    "description": "Key Vault name containing admin password"
+                }
+            }
+            self.template["outputs"]["keyVaultSecretName"] = {
+                "type": "string",
+                "value": "admin-password",
+                "metadata": {
+                    "description": "Name of the secret containing admin password"
+                }
+            }
+            self.template["outputs"]["keyVaultSecretUri"] = {
+                "type": "string",
+                "value": f"[reference(resourceId('Microsoft.KeyVault/vaults/secrets', substring(concat('kv-{lab_name}-', uniqueString(resourceGroup().id)), 0, 24), 'admin-password')).secretUri]",
+                "metadata": {
+                    "description": "URI to admin password secret"
+                }
+            }
     
     def _build_unified_prep_extension(self, vm_config: Dict[str, Any], instance_name: str, vm_type: str) -> Dict[str, Any]:
         """

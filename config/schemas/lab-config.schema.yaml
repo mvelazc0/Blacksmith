@@ -177,6 +177,10 @@ properties:
         minLength: 12
         maxLength: 123
         description: "Must contain uppercase, lowercase, digit, and special character"
+      store_in_keyvault:
+        type: boolean
+        default: false
+        description: "Store admin password in Azure Key Vault for easy Bastion access (no more copy/paste)"
 
   virtual_machines:
     type: array
