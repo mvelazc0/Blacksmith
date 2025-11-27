@@ -6,7 +6,7 @@
 name: "ad-groups-delegation-lab"
 description: "Lab demonstrating AD groups with granular local administrator delegation for attack path scenarios"
 location: "westus2"
-resource_group: "rg-blacksmith-admin-groups"
+resource_group: "rg-blacksmith-admin-groups1"
 append_random_suffix: true
 
 # Network Configuration
@@ -21,18 +21,6 @@ network:
       address_prefix: "192.168.2.0/24"
     - name: "snet-attack"
       address_prefix: "192.168.4.0/24"
-  
-  nsg:
-    name: "nsg-lab"
-    rules:
-      - name: "allow-rdp"
-        priority: 100
-        direction: "Inbound"
-        access: "Allow"
-        protocol: "Tcp"
-        source_port: "*"
-        destination_port: "3389"
-        source_address: "*"
   
   remote_access:
     mode: "AzureBastionHost"

@@ -688,10 +688,12 @@ class TemplateBuilder:
         else:  # ubuntu
             # Ubuntu needs more tools installed
             install_commands.append("export DEBIAN_FRONTEND=noninteractive")
+            # Enable universe repository (required for python3-pip in Ubuntu 22.04)
+            install_commands.append("add-apt-repository universe -y")
             # Use apt-get update with || true to ignore command-not-found database errors
             # This is a known Ubuntu issue where the cnf-update-db post-invoke script can fail
             install_commands.append("apt-get update || true")
-            # Use python3-pip from universe repository (already enabled in Ubuntu 22.04)
+            # Install base packages from universe repository
             install_commands.append("apt-get install -y python3 python3-pip git curl wget unzip")
             
             tool_install = {
@@ -748,6 +750,13 @@ class TemplateBuilder:
         """
         Calculate IP address for VM instance.
         
+        Priority order:
+        1. Domain controller IP from domain config (multi-domain mode)
+        2. Explicit ip_start in VM network config
+        3. Explicit private_ip in VM network config
+        4. Derive from assigned subnet's address range
+        5. Fallback to default range
+        
         Args:
             vm: VM configuration dictionary
             index: Instance index (0-based)
@@ -758,7 +767,7 @@ class TemplateBuilder:
         vm_network = vm.get('network', {})
         count = vm.get('count', 1)
         
-        # For multi-domain mode, check if this is a DC and get IP from domain config
+        # Priority 1: For multi-domain mode, check if this is a DC and get IP from domain config
         if self._get_domain_mode() == 'multi' and vm.get('role') == 'domain_controller':
             vm_identifier = vm.get('suffix') or vm.get('name')
             domains = self.config.get('domains', [])
@@ -766,15 +775,14 @@ class TemplateBuilder:
                 if domain.get('dc_vm') == vm_identifier:
                     return domain.get('dc_ip')
         
-        # Check if ip_start is provided - if so, use it for IP calculation
+        # Priority 2: Check if ip_start is provided
         ip_start = vm_network.get('ip_start')
         if ip_start:
-            # Use ip_start and increment by index
             ip_parts = ip_start.split('.')
             ip_parts[-1] = str(int(ip_parts[-1]) + index)
             return '.'.join(ip_parts)
         
-        # Otherwise use private_ip (for single VMs with explicit IP)
+        # Priority 3: Check if private_ip is provided
         private_ip = vm_network.get('private_ip')
         if private_ip:
             if count > 1:
@@ -786,8 +794,67 @@ class TemplateBuilder:
                 # Single VM with explicit private_ip
                 return private_ip
         
-        # Fallback default (should rarely be used)
+        # Priority 4: Derive IP from assigned subnet (works for both single and multi-domain)
+        subnet_name = self._get_vm_subnet_for_ip_calc(vm)
+        if subnet_name:
+            subnet_prefix = self._find_subnet_prefix(subnet_name)
+            if subnet_prefix:
+                # Extract base IP from subnet (e.g., "192.168.1.0/24" -> "192.168.1")
+                base_ip = '.'.join(subnet_prefix.split('/')[0].split('.')[:-1])
+                # Start from .10 and increment by index
+                return f"{base_ip}.{10 + index}"
+        
+        # Priority 5: Fallback default (should rarely be used)
         return f"192.168.1.{10 + index}"
+    
+    def _get_vm_subnet_for_ip_calc(self, vm: Dict[str, Any]) -> str:
+        """
+        Get the subnet name for a VM for IP calculation purposes.
+        Handles both single-domain and multi-domain modes.
+        
+        Args:
+            vm: VM configuration dictionary
+            
+        Returns:
+            Subnet name or None
+        """
+        try:
+            if self._get_domain_mode() == 'multi':
+                vm_domain = self._get_vm_domain(vm)
+                return self._resolve_vm_subnet(vm, vm_domain)
+            else:
+                # Single domain or no domain - use explicit subnet or first available
+                return vm.get('network', {}).get('subnet') or \
+                       (self.config.get('network', {}).get('subnets', [{}])[0].get('name'))
+        except (ValueError, IndexError, KeyError):
+            return None
+    
+    def _find_subnet_prefix(self, subnet_name: str) -> str:
+        """
+        Find the address prefix for a given subnet name.
+        Searches in domain-specific subnets first, then global subnets.
+        
+        Args:
+            subnet_name: Name of the subnet
+            
+        Returns:
+            Subnet address prefix (e.g., "192.168.1.0/24") or None
+        """
+        # Check domain-specific subnets (multi-domain mode)
+        if self._get_domain_mode() == 'multi':
+            domains = self.config.get('domains', [])
+            for domain in domains:
+                for subnet in domain.get('subnets', []):
+                    if subnet.get('name') == subnet_name:
+                        return subnet.get('address_prefix')
+        
+        # Check global subnets
+        global_subnets = self.config.get('network', {}).get('subnets', [])
+        for subnet in global_subnets:
+            if subnet.get('name') == subnet_name:
+                return subnet.get('address_prefix')
+        
+        return None
     
     def _create_nic_resource(self, vm: Dict[str, Any], instance_name: str, index: int) -> Dict[str, Any]:
         """Create network interface resource."""
@@ -1988,8 +2055,8 @@ class TemplateBuilder:
         if not dc_vm:
             return
         
-        # Get the actual DC name (might be generated from suffix)
-        dc_name = self._generate_vm_name(dc_vm, 0) if dc_vm.get('suffix') else dc_vm.get('name')
+        # Get the actual DC name - ALWAYS use _generate_vm_name to handle random suffix
+        dc_name = self._generate_vm_name(dc_vm, 0)
         
         # Step 1: Add prep script to install DSC modules on DC
         self._add_dc_prep_extension(dc_name)
@@ -2094,8 +2161,8 @@ class TemplateBuilder:
         if not dc_vm:
             return
         
-        # Get the actual DC name
-        dc_name = self._generate_vm_name(dc_vm, 0) if dc_vm.get('suffix') else dc_vm.get('name')
+        # Get the actual DC name - ALWAYS use _generate_vm_name to handle random suffix
+        dc_name = self._generate_vm_name(dc_vm, 0)
         
         # Extract child domain name (first part of FQDN)
         child_name = domain_fqdn.split('.')[0]
@@ -2311,7 +2378,8 @@ class TemplateBuilder:
             if not source_dc_vm:
                 continue
             
-            source_dc_name = self._generate_vm_name(source_dc_vm, 0) if source_dc_vm.get('suffix') else source_dc_vm.get('name')
+            # Get the actual DC name - ALWAYS use _generate_vm_name to handle random suffix
+            source_dc_name = self._generate_vm_name(source_dc_vm, 0)
             
             # Determine dependencies - trust must wait for both domains to be created
             trust_dependencies = [
@@ -2428,6 +2496,11 @@ class TemplateBuilder:
         # Build OU paths
         domain_parts = domain_fqdn.split('.')
         
+        # Determine if this is a child domain by checking domain configuration
+        domains = self.config.get('domains', [])
+        current_domain = next((d for d in domains if d['name'] == domain_fqdn), None)
+        is_child_domain = current_domain and current_domain.get('type') == 'child_domain'
+        
         for vm in vms_to_join:
             # Skip if join_domain is explicitly set to false
             if not vm.get('join_domain', True):
@@ -2460,15 +2533,24 @@ class TemplateBuilder:
                 self.template["resources"].append(prep_extension)
                 
                 # Step 2: DSC extension for domain join
+                # Build dependencies - must wait for DNS update AND domain creation
+                join_dependencies = [
+                    f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', '{extension_name}')]",
+                    "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
+                ]
+                
+                # For child domain VMs, also wait for child domain creation
+                if is_child_domain:
+                    join_dependencies.append(
+                        f"[resourceId('Microsoft.Resources/deployments', 'CreateChildDomain-{domain_netbios}')]"
+                    )
+                
                 join_extension = {
                     "type": "Microsoft.Compute/virtualMachines/extensions",
                     "apiVersion": "2021-11-01",
                     "name": f"{instance_name}/JoinDomain",
                     "location": "[parameters('location')]",
-                    "dependsOn": [
-                        f"[resourceId('Microsoft.Compute/virtualMachines/extensions', '{instance_name}', '{extension_name}')]",
-                        "[resourceId('Microsoft.Resources/deployments', 'UpdateVNetDNS')]"
-                    ],
+                    "dependsOn": join_dependencies,
                     "properties": {
                         "publisher": "Microsoft.Powershell",
                         "type": "DSC",

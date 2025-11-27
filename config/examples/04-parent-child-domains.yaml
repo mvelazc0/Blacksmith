@@ -1,12 +1,12 @@
 # Blacksmith Lab Configuration - Level 4: Multi-Domain Forest
 # Scenario: Enterprise-scale multi-domain AD forest
 # Infrastructure: 2 DCs + 2 servers + 2 workstations + 1 attack VM (across 2 domains)
-# Purpose: Demonstrate parent-child domain configuration with cross-domain delegation
+# Purpose: Demonstrate parent-child domain configuration with Cross Domain delegation
 
 name: "parent-child-domains-lab"
-description: "Multi-domain AD forest with parent-child relationship and cross-domain delegation"
-location: "eastus"
-resource_group: "rg-blacksmith-multi-domain"
+description: "Multi-domain AD forest with parent-child relationship and Cross Domain delegation"
+location: "westus2"
+resource_group: "rg-blacksmith-multi-domain4"
 append_random_suffix: true
 
 # Network Configuration
@@ -112,7 +112,7 @@ domains:
         local_admin_on:
           - type: "windows_server"
       
-      - name: "Cross-Domain Admins"
+      - name: "Cross Domain Admins"
         scope: "Global"
         members: ["alice"]
         local_admin_on:
@@ -127,7 +127,7 @@ domains:
         password: "CorpPass123!"
         department: "IT"
         job_title: "Administrator"
-        groups: ["Corp Admins", "Cross-Domain Admins"]
+        groups: ["Corp Admins", "Cross Domain Admins"]
     
     # VMs that belong to corp domain
     endpoints:
@@ -240,57 +240,41 @@ features:
               x_path_queries:
                 # ============================================
                 # PERSISTENCE & LATERAL MOVEMENT
-                # ============================================
-                
+                # ============================================                
                 # Service Installed (7045) - Malicious service creation, PsExec
-                - "System!*[System[(EventID=7045)]]"
-                
+                - "System!*[System[(EventID=7045)]]"                
                 # Service Started/Stopped (7036) - Track service execution and manipulation
-                - "System!*[System[(EventID=7036)]]"
-                
+                - "System!*[System[(EventID=7036)]]"                
                 # Service Control Manager (7040) - Service config changes
-                - "System!*[System[(EventID=7040)]]"
-                
+                - "System!*[System[(EventID=7040)]]"                
                 # ============================================
                 # SYSTEM INTEGRITY & CRASHES
-                # ============================================
-                
+                # ============================================              
                 # System Startup (6005, 6009) - Reboot detection
-                - "System!*[System[(EventID=6005 or EventID=6009)]]"
-                
+                - "System!*[System[(EventID=6005 or EventID=6009)]]"                
                 # System Shutdown (6006) - Unexpected shutdowns
-                - "System!*[System[(EventID=6006)]]"
-                
+                - "System!*[System[(EventID=6006)]]"                
                 # Application Crash (1000, 1001) - Exploitation attempts
-                - "System!*[System[Provider[@Name='Application Error'] and (EventID=1000 or EventID=1001)]]"
-                
+                - "System!*[System[Provider[@Name='Application Error'] and (EventID=1000 or EventID=1001)]]"                
                 # Windows Error Reporting (1001) - Crash dumps
-                - "System!*[System[Provider[@Name='Windows Error Reporting'] and (EventID=1001)]]"
-                
+                - "System!*[System[Provider[@Name='Windows Error Reporting'] and (EventID=1001)]]"                
                 # ============================================
                 # DRIVER & KERNEL CHANGES
-                # ============================================
-                
+                # ============================================                
                 # Driver Loaded (7000, 7001, 7026) - Rootkit detection
-                - "System!*[System[(EventID=7000 or EventID=7001 or EventID=7026)]]"
-                
+                - "System!*[System[(EventID=7000 or EventID=7001 or EventID=7026)]]"                
                 # Kernel Driver Signing (219) - Unsigned driver loaded
-                - "System!*[System[Provider[@Name='Microsoft-Windows-Kernel-PnP'] and (EventID=219)]]"
-                
+                - "System!*[System[Provider[@Name='Microsoft-Windows-Kernel-PnP'] and (EventID=219)]]"                
                 # ============================================
                 # TIME MANIPULATION
-                # ============================================
-                
+                # ============================================                
                 # System Time Changed (1) - Kerberos ticket manipulation
-                - "System!*[System[Provider[@Name='Microsoft-Windows-Kernel-General'] and (EventID=1)]]"
-                
+                - "System!*[System[Provider[@Name='Microsoft-Windows-Kernel-General'] and (EventID=1)]]"                
                 # ============================================
                 # REMOTE CONNECTIONS
-                # ============================================
-                
+                # ============================================            
                 # Remote Desktop Services (1149) - RDP connection established
-                - "System!*[System[Provider[@Name='Microsoft-Windows-TerminalServices-RemoteConnectionManager'] and (EventID=1149)]]"
-                
+                - "System!*[System[Provider[@Name='Microsoft-Windows-TerminalServices-RemoteConnectionManager'] and (EventID=1149)]]"                
                 # RDP Session Reconnection (4624) - Session hijacking
                 - "System!*[System[Provider[@Name='Microsoft-Windows-TerminalServices-LocalSessionManager'] and (EventID=21, 22, 24, 25)]]"
           
